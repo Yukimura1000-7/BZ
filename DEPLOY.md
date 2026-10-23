@@ -135,19 +135,55 @@ sudo certbot --nginx -d your-domain.com
 
 ---
 
-## Вариант 3: Vercel (бесплатно)
+## Вариант 3: Netlify (бесплатно) ⭐ РЕКОМЕНДУЕТСЯ
+
+### Требования
+- Аккаунт на [Netlify](https://netlify.com)
+- GitHub репозиторий
+- **Supabase проект** (см. [SUPABASE_SETUP.md](./SUPABASE_SETUP.md))
+
+### Деплой
+
+1. **Настрой Supabase** (см. [SUPABASE_SETUP.md](./SUPABASE_SETUP.md))
+2. Залить код на GitHub
+3. Перейти на [app.netlify.com](https://app.netlify.com)
+4. "Add new site" → "Import an existing project"
+5. Выбрать GitHub репозиторий
+6. Настройки:
+   - Build command: `npm run build`
+   - Publish directory: `dist`
+7. **ВАЖНО:** Добавить Environment Variables:
+   - `VITE_SUPABASE_URL` = твой Supabase URL
+   - `VITE_SUPABASE_ANON_KEY` = твой anon key
+8. Нажать "Deploy site"
+
+### Почему Netlify?
+- ✅ Бесплатно
+- ✅ Автоматический деплой при push в Git
+- ✅ Поддержка environment variables
+- ✅ CDN по всему миру
+- ✅ HTTPS из коробки
+
+---
+
+## Вариант 4: Vercel (бесплатно)
 
 ### Требования
 - Аккаунт на [Vercel](https://vercel.com)
 - GitHub репозиторий
+- **Supabase проект** (см. [SUPABASE_SETUP.md](./SUPABASE_SETUP.md))
 
 ### Деплой
 
-1. Залить код на GitHub
-2. Перейти на [vercel.com/new](https://vercel.com/new)
-3. Импортировать репозиторий
-4. Vercel автоматически определит Vite проект
-5. Нажать "Deploy"
+1. **Настрой Supabase** (см. [SUPABASE_SETUP.md](./SUPABASE_SETUP.md))
+2. Залить код на GitHub
+3. Перейти на [vercel.com/new](https://vercel.com/new)
+4. Импортировать репозиторий
+5. Vercel автоматически определит Vite проект
+6. **ВАЖНО:** Добавить Environment Variables:
+   - `VITE_SUPABASE_URL` = твой Supabase URL
+   - `VITE_SUPABASE_ANON_KEY` = твой anon key
+7. Нажать "Deploy"
 
 ### Кастомный домен
 

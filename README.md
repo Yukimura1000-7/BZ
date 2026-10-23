@@ -100,8 +100,9 @@ docker rm econom-strategy
 - **Styling:** Tailwind CSS
 - **Icons:** Lucide React
 - **QR Codes:** qrcode.react
+- **Database & Realtime:** Supabase (PostgreSQL + Realtime)
 - **Build Tool:** Vite
-- **Deployment:** Docker + Nginx
+- **Deployment:** Docker + Nginx / Netlify / Vercel
 
 ## 📦 Структура проекта
 
