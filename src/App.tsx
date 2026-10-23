@@ -12,6 +12,7 @@ import TimerEffect from './components/TimerEffect';
 import ToastContainer from './components/ToastContainer';
 import CurrencyUpdater from './components/CurrencyUpdater';
 import StorageSync from './components/StorageSync';
+import SupabaseRealtime from './components/SupabaseRealtime';
 
 function App() {
   const { currentPlayerId, isAdmin, isAuthenticated, session } = useGameStore();
@@ -21,6 +22,7 @@ function App() {
       <TimerEffect />
       <CurrencyUpdater />
       <StorageSync />
+      <SupabaseRealtime />
       <ToastContainer />
       <div className="min-h-screen min-h-[100dvh] bg-gray-900 text-white">
         <Routes>

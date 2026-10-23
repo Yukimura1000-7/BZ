@@ -11,7 +11,7 @@ export default function JoinSession() {
   const [error, setError] = useState('');
   const [joinedPlayer, setJoinedPlayer] = useState<any>(null);
   const { code } = useParams<{ code: string }>();
-  const { session, players, joinSession, setCurrentPlayer } = useGameStore();
+  const { session, players, joinSession, setCurrentPlayer, loadSession } = useGameStore();
   const { addToast } = useToastStore();
   const navigate = useNavigate();
 
@@ -21,7 +21,7 @@ export default function JoinSession() {
     }
   }, [code]);
 
-  const handleJoin = () => {
+  const handleJoin = async () => {
     if (!name.trim()) {
       setError('Введите имя');
       return;
@@ -30,20 +30,28 @@ export default function JoinSession() {
       setError('Введите код сессии');
       return;
     }
-    if (!session) {
-      setError('Сессия не найдена. Попросите администратора создать сессию.');
-      return;
+    
+    // Если сессии нет локально — пробуем загрузить из Supabase
+    let currentSession = session;
+    if (!currentSession) {
+      const loaded = await loadSession(sessionCode.toUpperCase());
+      if (!loaded) {
+        setError('Сессия не найдена. Попросите администратора создать сессию.');
+        return;
+      }
+      currentSession = loaded;
     }
-    if (session.code !== sessionCode.toUpperCase()) {
+    
+    if (currentSession.code !== sessionCode.toUpperCase()) {
       setError('Неверный код сессии');
       return;
     }
-    if (session.status === 'ended') {
+    if (currentSession.status === 'ended') {
       setError('Сессия завершена');
       return;
     }
 
-    const player = joinSession(session.id, name.trim());
+    const player = await joinSession(currentSession.id, name.trim());
     if (player) {
       setJoinedPlayer(player);
       setError('');

@@ -27,11 +27,15 @@ export default function AdminPanel() {
 
   const [newSessionName, setNewSessionName] = useState('');
 
-  const handleCreateSession = () => {
+  const handleCreateSession = async () => {
     const name = newSessionName.trim() || 'Игровая сессия';
-    const created = createSession(name);
+    const created = await createSession(name);
     setNewSessionName('');
-    addToast(`Сессия "${name}" создана! Код: ${created.code}`, 'success', 5000);
+    if (created) {
+      addToast(`Сессия "${name}" создана! Код: ${created.code}`, 'success', 5000);
+    } else {
+      addToast('Не удалось создать сессию', 'error');
+    }
   };
 
   if (!session) {
