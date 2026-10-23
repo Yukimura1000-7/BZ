@@ -5,7 +5,7 @@ import { useToastStore } from '../store/toastStore';
 
 export default function Registration() {
   const navigate = useNavigate();
-  const { savedPlayerData, session, restoreSession } = useGameStore();
+  const { savedPlayerData, session, restoreSession, isSupabaseConnected } = useGameStore();
   const { addToast } = useToastStore();
 
   const handleRestoreSession = () => {
@@ -81,6 +81,17 @@ export default function Registration() {
           <Lock size={16} className="text-white" />
           Вход для администратора
         </button>
+
+        {/* Supabase status indicator */}
+        <div className={`mt-6 text-center text-xs px-3 py-2 rounded-lg ${
+          isSupabaseConnected 
+            ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-400' 
+            : 'bg-yellow-500/10 border border-yellow-500/30 text-yellow-400'
+        }`}>
+          {isSupabaseConnected 
+            ? '✅ Supabase подключен — синхронизация между устройствами активна' 
+            : '⚠️ Локальный режим — работает только на этом устройстве. Для мультидевайс режима настройте Supabase.'}
+        </div>
       </div>
     </div>
   );

@@ -11,7 +11,7 @@ export default function JoinSession() {
   const [error, setError] = useState('');
   const [joinedPlayer, setJoinedPlayer] = useState<any>(null);
   const { code } = useParams<{ code: string }>();
-  const { session, players, joinSession, setCurrentPlayer, loadSession } = useGameStore();
+  const { session, players, joinSession, setCurrentPlayer, loadSessionByCode } = useGameStore();
   const { addToast } = useToastStore();
   const navigate = useNavigate();
 
@@ -30,18 +30,24 @@ export default function JoinSession() {
       setError('Введите код сессии');
       return;
     }
-    
-    // Если сессии нет локально — пробуем загрузить из Supabase
+
     let currentSession = session;
+
+    // Если сессии нет локально — пробуем загрузить из Supabase
     if (!currentSession) {
-      const loaded = await loadSession(sessionCode.toUpperCase());
+      const loaded = await loadSessionByCode(sessionCode.toUpperCase());
       if (!loaded) {
         setError('Сессия не найдена. Попросите администратора создать сессию.');
         return;
       }
       currentSession = loaded;
     }
-    
+
+    // Проверяем код
+    if (!currentSession) {
+      setError('Сессия не найдена');
+      return;
+    }
     if (currentSession.code !== sessionCode.toUpperCase()) {
       setError('Неверный код сессии');
       return;
@@ -51,7 +57,7 @@ export default function JoinSession() {
       return;
     }
 
-    const player = await joinSession(currentSession.id, name.trim());
+    const player = joinSession(currentSession.id, name.trim());
     if (player) {
       setJoinedPlayer(player);
       setError('');

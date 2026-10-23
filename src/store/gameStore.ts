@@ -1,5 +1,6 @@
 import { create } from 'zustand';
-import { supabase, type Database } from '../lib/supabase';
+import { persist, createJSONStorage } from 'zustand/middleware';
+import { getSupabase, isSupabaseConfigured } from '../lib/supabase';
 
 export type PlayerRole = 'buyer' | 'seller';
 
@@ -57,62 +58,75 @@ export interface Session {
 }
 
 interface GameState {
+  // Session
   session: Session | null;
+  
+  // Players
   players: Player[];
   currentPlayerId: string | null;
   savedPlayerData: Player | null;
+  
+  // Deals
   deals: Deal[];
   pendingDeal: Deal | null;
+  
+  // Game
   timerRunning: boolean;
+  
+  // Events
   events: GameEvent[];
   currencyRates: CurrencyRate[];
+  
+  // Admin
   isAdmin: boolean;
   isAuthenticated: boolean;
   adminLogin: string;
   adminPassword: string;
+  
+  // Supabase
   isSupabaseConnected: boolean;
-  lastSyncTime: number;
-
-  // Session
-  createSession: (name?: string) => Promise<Session | null>;
-  joinSession: (sessionId: string, playerName: string) => Promise<Player | null>;
+  
+  // Session actions
+  createSession: (name?: string) => Session;
+  loadSessionByCode: (code: string) => Promise<Session | null>;
+  joinSession: (sessionId: string, playerName: string) => Player | null;
   leaveSession: () => void;
-  endSession: () => Promise<void>;
+  endSession: () => void;
   restoreSession: () => boolean;
-  loadSession: (code: string) => Promise<Session | null>;
-
+  
+  // Player actions
   setCurrentPlayer: (id: string) => void;
-
-  // Deals
-  createDeal: (sellerId: string, buyerId: string, goods: string, quantity: number, amount: number) => Promise<void>;
-  confirmDeal: (dealId: string, playerId: string) => Promise<void>;
-  rejectDeal: (dealId: string) => Promise<void>;
-
-  // Phase
-  startPhase: (duration: number) => Promise<void>;
-  pausePhase: () => Promise<void>;
-  resumePhase: () => Promise<void>;
-  endPhase: () => Promise<void>;
+  
+  // Deal actions
+  createDeal: (sellerId: string, buyerId: string, goods: string, quantity: number, amount: number) => void;
+  confirmDeal: (dealId: string, playerId: string) => void;
+  rejectDeal: (dealId: string) => void;
+  
+  // Phase actions
+  startPhase: (duration: number) => void;
+  pausePhase: () => void;
+  resumePhase: () => void;
+  endPhase: () => void;
   tickTimer: () => void;
-
-  // Events
-  addEvent: (event: Omit<GameEvent, 'id' | 'timestamp'>) => Promise<void>;
-  updateCurrencyRate: (currency: string, rate: number) => Promise<void>;
-
-  // Admin
+  
+  // Event actions
+  addEvent: (event: Omit<GameEvent, 'id' | 'timestamp'>) => void;
+  updateCurrencyRate: (currency: string, rate: number) => void;
+  
+  // Admin actions
   setAdmin: (isAdmin: boolean) => void;
-  login: (login: string, password: string) => Promise<boolean>;
+  login: (login: string, password: string) => boolean;
   logout: () => void;
   setAdminCredentials: (login: string, password: string) => void;
-
+  
   // Bank
-  paySalary: () => Promise<void>;
-  deposit: (playerId: string, amount: number) => Promise<void>;
-  withdraw: (playerId: string, amount: number) => Promise<void>;
-
+  paySalary: () => void;
+  deposit: (playerId: string, amount: number) => void;
+  withdraw: (playerId: string, amount: number) => void;
+  
   // Sync
   syncFromSupabase: () => Promise<void>;
-  checkSupabaseConnection: () => Promise<boolean>;
+  pushToSupabase: () => Promise<void>;
 }
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
@@ -125,687 +139,604 @@ const initialCurrencyRates: CurrencyRate[] = [
   { currency: 'Золото', rate: 5800, change: 0 },
 ];
 
-// Helpers для конвертации между Supabase и app форматами
-const dbSessionToApp = (db: any): Session => ({
-  id: db.id,
-  code: db.code,
-  name: db.name,
-  status: db.status,
-  phase: db.phase,
-  timer: db.timer,
-  phaseDuration: db.phase_duration,
-  createdAt: new Date(db.created_at).getTime(),
-});
+export const useGameStore = create<GameState>()(
+  persist(
+    (set, get) => ({
+      session: null,
+      players: [],
+      currentPlayerId: null,
+      savedPlayerData: null,
+      deals: [],
+      pendingDeal: null,
+      timerRunning: false,
+      events: [],
+      currencyRates: initialCurrencyRates,
+      isAdmin: false,
+      isAuthenticated: false,
+      adminLogin: 'admin',
+      adminPassword: 'admin',
+      isSupabaseConnected: isSupabaseConfigured,
 
-const dbPlayerToApp = (db: any): Player => ({
-  id: db.id,
-  name: db.name,
-  sessionId: db.session_id,
-  role: db.role,
-  balance: db.balance,
-  goods: db.goods,
-  qrCode: db.id,
-  dealsCount: db.deals_count,
-  salary: db.salary,
-  registered: true,
-});
+      // Синхронизация ИЗ Supabase (загрузка данных)
+      syncFromSupabase: async () => {
+        if (!isSupabaseConfigured) return;
+        const client = getSupabase();
+        if (!client) return;
+        const state = get();
+        if (!state.session) return;
 
-const dbDealToApp = (db: any): Deal => ({
-  id: db.id,
-  sellerId: db.seller_id,
-  buyerId: db.buyer_id,
-  goods: db.goods,
-  quantity: db.quantity,
-  amount: db.amount,
-  timestamp: new Date(db.created_at).getTime(),
-  status: db.status,
-  sellerConfirmed: db.seller_confirmed,
-  buyerConfirmed: db.buyer_confirmed,
-});
+        try {
+          const [sessionRes, playersRes, dealsRes, eventsRes, ratesRes] = await Promise.all([
+            client.from('sessions').select('*').eq('id', state.session.id).single(),
+            client.from('players').select('*').eq('session_id', state.session.id),
+            client.from('deals').select('*').eq('session_id', state.session.id),
+            client.from('events').select('*').eq('session_id', state.session.id).order('created_at', { ascending: false }),
+            client.from('currency_rates').select('*').eq('session_id', state.session.id),
+          ]);
 
-const dbEventToApp = (db: any): GameEvent => ({
-  id: db.id,
-  title: db.title,
-  description: db.description,
-  timestamp: new Date(db.created_at).getTime(),
-  type: db.type,
-});
+          const updates: any = {};
 
-export const useGameStore = create<GameState>((set, get) => ({
-  session: null,
-  players: [],
-  currentPlayerId: null,
-  savedPlayerData: null,
-  deals: [],
-  pendingDeal: null,
-  timerRunning: false,
-  events: [],
-  currencyRates: initialCurrencyRates,
-  isAdmin: false,
-  isAuthenticated: false,
-  adminLogin: 'admin',
-  adminPassword: 'admin',
-  isSupabaseConnected: false,
-  lastSyncTime: 0,
+          if (sessionRes.data) {
+            updates.session = {
+              id: sessionRes.data.id,
+              code: sessionRes.data.code,
+              name: sessionRes.data.name,
+              status: sessionRes.data.status,
+              phase: sessionRes.data.phase,
+              timer: sessionRes.data.timer,
+              phaseDuration: sessionRes.data.phase_duration,
+              createdAt: new Date(sessionRes.data.created_at).getTime(),
+            };
+          }
 
-  checkSupabaseConnection: async () => {
-    try {
-      const { error } = await supabase.from('sessions').select('count').limit(1);
-      const connected = !error;
-      set({ isSupabaseConnected: connected });
-      return connected;
-    } catch {
-      set({ isSupabaseConnected: false });
-      return false;
-    }
-  },
+          if (playersRes.data) {
+            updates.players = playersRes.data.map((db: any) => ({
+              id: db.id,
+              name: db.name,
+              sessionId: db.session_id,
+              role: db.role,
+              balance: db.balance,
+              goods: db.goods,
+              qrCode: db.id,
+              dealsCount: db.deals_count,
+              salary: db.salary,
+              registered: true,
+            }));
+          }
 
-  syncFromSupabase: async () => {
-    const state = get();
-    if (!state.session) return;
+          if (dealsRes.data) {
+            updates.deals = dealsRes.data.map((db: any) => ({
+              id: db.id,
+              sellerId: db.seller_id,
+              buyerId: db.buyer_id,
+              goods: db.goods,
+              quantity: db.quantity,
+              amount: db.amount,
+              timestamp: new Date(db.created_at).getTime(),
+              status: db.status,
+              sellerConfirmed: db.seller_confirmed,
+              buyerConfirmed: db.buyer_confirmed,
+            }));
+          }
 
-    try {
-      // Загружаем всё параллельно
-      const [sessionRes, playersRes, dealsRes, eventsRes, ratesRes] = await Promise.all([
-        supabase.from('sessions').select('*').eq('id', state.session.id).single(),
-        supabase.from('players').select('*').eq('session_id', state.session.id),
-        supabase.from('deals').select('*').eq('session_id', state.session.id),
-        supabase.from('events').select('*').eq('session_id', state.session.id).order('created_at', { ascending: false }),
-        supabase.from('currency_rates').select('*').eq('session_id', state.session.id),
-      ]);
+          if (eventsRes.data) {
+            updates.events = eventsRes.data.map((db: any) => ({
+              id: db.id,
+              title: db.title,
+              description: db.description,
+              timestamp: new Date(db.created_at).getTime(),
+              type: db.type,
+            }));
+          }
 
-      const updates: Partial<GameState> = { lastSyncTime: Date.now() };
+          if (ratesRes.data && ratesRes.data.length > 0) {
+            updates.currencyRates = ratesRes.data.map((r: any) => ({
+              currency: r.currency,
+              rate: Number(r.rate),
+              change: Number(r.change),
+            }));
+          }
 
-      if (sessionRes.data) updates.session = dbSessionToApp(sessionRes.data);
-      if (playersRes.data) updates.players = playersRes.data.map(dbPlayerToApp);
-      if (dealsRes.data) updates.deals = dealsRes.data.map(dbDealToApp);
-      if (eventsRes.data) updates.events = eventsRes.data.map(dbEventToApp);
-      if (ratesRes.data && ratesRes.data.length > 0) {
-        updates.currencyRates = ratesRes.data.map(r => ({
-          currency: r.currency,
-          rate: Number(r.rate),
-          change: Number(r.change),
-        }));
-      }
+          set(updates);
+        } catch (e) {
+          console.error('Sync from Supabase error:', e);
+        }
+      },
 
-      set(updates as any);
-    } catch (e) {
-      console.error('Sync error:', e);
-    }
-  },
+      // Синхронизация В Supabase (отправка данных)
+      pushToSupabase: async () => {
+        if (!isSupabaseConfigured) return;
+        const client = getSupabase();
+        if (!client) return;
+        const state = get();
+        if (!state.session) return;
 
-  createSession: async (name?: string) => {
-    const sessionName = name || 'Игровая сессия';
-    const code = generateSessionCode();
-    const state = get();
+        try {
+          // Обновляем сессию
+          await client.from('sessions').upsert({
+            id: state.session.id,
+            code: state.session.code,
+            name: state.session.name,
+            status: state.session.status,
+            phase: state.session.phase,
+            timer: state.session.timer,
+            phase_duration: state.session.phaseDuration,
+          });
 
-    try {
-      // Пробуем создать в Supabase
-      const { data, error } = await supabase
-        .from('sessions')
-        .insert([{
-          code,
-          name: sessionName,
+          // Обновляем игроков
+          for (const p of state.players) {
+            await client.from('players').upsert({
+              id: p.id,
+              session_id: state.session.id,
+              name: p.name,
+              role: p.role,
+              balance: p.balance,
+              goods: p.goods,
+              deals_count: p.dealsCount,
+              salary: p.salary,
+            });
+          }
+
+          // Обновляем сделки
+          for (const d of state.deals) {
+            await client.from('deals').upsert({
+              id: d.id,
+              session_id: state.session.id,
+              seller_id: d.sellerId,
+              buyer_id: d.buyerId,
+              goods: d.goods,
+              quantity: d.quantity,
+              amount: d.amount,
+              status: d.status,
+              seller_confirmed: d.sellerConfirmed,
+              buyer_confirmed: d.buyerConfirmed,
+            });
+          }
+
+          // Обновляем события
+          for (const e of state.events) {
+            await client.from('events').upsert({
+              id: e.id,
+              session_id: state.session.id,
+              title: e.title,
+              description: e.description,
+              type: e.type,
+            });
+          }
+
+          // Обновляем курсы валют
+          for (const r of state.currencyRates) {
+            await client.from('currency_rates').upsert({
+              session_id: state.session.id,
+              currency: r.currency,
+              rate: r.rate,
+              change: r.change,
+            }, { onConflict: 'session_id,currency' });
+          }
+        } catch (e) {
+          console.error('Push to Supabase error:', e);
+        }
+      },
+
+      createSession: (name?: string) => {
+        const session: Session = {
+          id: generateId(),
+          code: generateSessionCode(),
+          name: name || 'Игровая сессия',
           status: 'waiting',
           phase: 0,
           timer: 600,
-          phase_duration: 600,
-          admin_login: state.adminLogin,
-          admin_password: state.adminPassword,
-        }])
-        .select()
-        .single();
+          phaseDuration: 600,
+          createdAt: Date.now(),
+        };
+        set({ session, isAdmin: true, isAuthenticated: true, players: [], deals: [], events: [] });
+        
+        // Push в Supabase
+        get().pushToSupabase();
+        
+        return session;
+      },
 
-      if (error) throw error;
+      loadSessionByCode: async (code: string) => {
+        if (!isSupabaseConfigured) return null;
+        const client = getSupabase();
+        if (!client) return null;
 
-      const session = dbSessionToApp(data);
+        try {
+          // Ищем сессию по коду
+          const { data: sessionData, error } = await client
+            .from('sessions')
+            .select('*')
+            .eq('code', code.toUpperCase())
+            .single();
 
-      // Создаём начальные курсы валют
-      for (const rate of initialCurrencyRates) {
-        await supabase.from('currency_rates').insert([{
-          session_id: session.id,
-          currency: rate.currency,
-          rate: rate.rate,
-          change: 0,
-        }]);
-      }
+          if (error || !sessionData) {
+            console.error('Session not found:', error);
+            return null;
+          }
 
-      set({
-        session,
-        isAdmin: true,
-        isAuthenticated: true,
-        players: [],
-        deals: [],
-        events: [],
-        currencyRates: initialCurrencyRates,
-      });
+          // Конвертируем в наш формат
+          const session: Session = {
+            id: sessionData.id,
+            code: sessionData.code,
+            name: sessionData.name,
+            status: sessionData.status,
+            phase: sessionData.phase,
+            timer: sessionData.timer,
+            phaseDuration: sessionData.phase_duration,
+            createdAt: new Date(sessionData.created_at).getTime(),
+          };
 
-      return session;
-    } catch (e) {
-      console.error('Create session error:', e);
-      // Fallback на localStorage
-      const session: Session = {
-        id: generateId(),
-        code,
-        name: sessionName,
-        status: 'waiting',
-        phase: 0,
-        timer: 600,
-        phaseDuration: 600,
-        createdAt: Date.now(),
-      };
-      set({
-        session,
-        isAdmin: true,
-        isAuthenticated: true,
-        players: [],
-        deals: [],
-        events: [],
-        currencyRates: initialCurrencyRates,
-        isSupabaseConnected: false,
-      });
-      return session;
-    }
-  },
+          // Загружаем связанные данные
+          const [playersRes, dealsRes, eventsRes, ratesRes] = await Promise.all([
+            client.from('players').select('*').eq('session_id', session.id),
+            client.from('deals').select('*').eq('session_id', session.id),
+            client.from('events').select('*').eq('session_id', session.id).order('created_at', { ascending: false }),
+            client.from('currency_rates').select('*').eq('session_id', session.id),
+          ]);
 
-  loadSession: async (code: string) => {
-    try {
-      const { data, error } = await supabase
-        .from('sessions')
-        .select('*')
-        .eq('code', code.toUpperCase())
-        .single();
+          const players = playersRes.data?.map((db: any) => ({
+            id: db.id,
+            name: db.name,
+            sessionId: db.session_id,
+            role: db.role,
+            balance: db.balance,
+            goods: db.goods,
+            qrCode: db.id,
+            dealsCount: db.deals_count,
+            salary: db.salary,
+            registered: true,
+          })) || [];
 
-      if (error || !data) return null;
+          const deals = dealsRes.data?.map((db: any) => ({
+            id: db.id,
+            sellerId: db.seller_id,
+            buyerId: db.buyer_id,
+            goods: db.goods,
+            quantity: db.quantity,
+            amount: db.amount,
+            timestamp: new Date(db.created_at).getTime(),
+            status: db.status,
+            sellerConfirmed: db.seller_confirmed,
+            buyerConfirmed: db.buyer_confirmed,
+          })) || [];
 
-      const session = dbSessionToApp(data);
-      set({ session });
+          const events = eventsRes.data?.map((db: any) => ({
+            id: db.id,
+            title: db.title,
+            description: db.description,
+            timestamp: new Date(db.created_at).getTime(),
+            type: db.type,
+          })) || [];
 
-      // Сразу загружаем связанные данные
-      await get().syncFromSupabase();
+          const currencyRates = ratesRes.data?.map((r: any) => ({
+            currency: r.currency,
+            rate: Number(r.rate),
+            change: Number(r.change),
+          })) || [];
 
-      return session;
-    } catch (e) {
-      console.error('Load session error:', e);
-      return null;
-    }
-  },
+          // Сохраняем всё локально
+          set({
+            session,
+            players,
+            deals,
+            events,
+            currencyRates: currencyRates.length > 0 ? currencyRates : initialCurrencyRates,
+          });
 
-  joinSession: async (sessionId: string, playerName: string) => {
-    const state = get();
-    if (!state.session || state.session.id !== sessionId) return null;
-    if (state.session.status === 'ended') return null;
+          console.log('✅ Session loaded from Supabase:', session.code);
+          return session;
+        } catch (e) {
+          console.error('Load session error:', e);
+          return null;
+        }
+      },
 
-    const id = generateId();
-    const role: PlayerRole = Math.random() < 0.6 ? 'buyer' : 'seller';
+      joinSession: (sessionId: string, playerName: string) => {
+        const state = get();
+        if (!state.session || state.session.id !== sessionId) return null;
+        if (state.session.status === 'ended') return null;
 
-    try {
-      const { data, error } = await supabase
-        .from('players')
-        .insert([{
+        const id = generateId();
+        const role: PlayerRole = Math.random() < 0.6 ? 'buyer' : 'seller';
+        const player: Player = {
           id,
-          session_id: sessionId,
           name: playerName,
+          sessionId,
           role,
           balance: 1000,
           goods: { 'Нефть': 0, 'Зерно': 5, 'Металл': 0, 'Техника': 0, 'Лекарства': 0 },
-          deals_count: 0,
+          qrCode: id,
+          dealsCount: 0,
           salary: 200,
-        }])
-        .select()
-        .single();
+          registered: true,
+        };
+        set((s) => ({ 
+          players: [...s.players, player], 
+          currentPlayerId: id,
+          isAuthenticated: false,
+          isAdmin: false,
+          savedPlayerData: player,
+        }));
+        
+        // Push в Supabase
+        get().pushToSupabase();
+        
+        return player;
+      },
 
-      if (error) throw error;
+      leaveSession: () => {
+        set({ currentPlayerId: null, isAdmin: false });
+      },
 
-      const player = dbPlayerToApp(data);
-
-      set((s) => ({
-        players: [...s.players, player],
-        currentPlayerId: id,
-        isAuthenticated: false,
-        isAdmin: false,
-        savedPlayerData: player,
-      }));
-
-      return player;
-    } catch (e) {
-      console.error('Join session error:', e);
-      return null;
-    }
-  },
-
-  leaveSession: () => set({ currentPlayerId: null, isAdmin: false }),
-
-  endSession: async () => {
-    const state = get();
-    if (state.session) {
-      try {
-        await supabase.from('sessions').delete().eq('id', state.session.id);
-      } catch (e) {
-        console.error('End session error:', e);
-      }
-    }
-    set({
-      session: null,
-      timerRunning: false,
-      isAuthenticated: false,
-      isAdmin: false,
-      players: [],
-      deals: [],
-      events: [],
-      savedPlayerData: null,
-    });
-  },
-
-  restoreSession: () => {
-    const state = get();
-    if (!state.savedPlayerData || !state.session) return false;
-    const playerExists = state.players.find(p => p.id === state.savedPlayerData!.id);
-    if (!playerExists) {
-      set({ savedPlayerData: null, currentPlayerId: null });
-      return false;
-    }
-    if (state.session.status === 'ended') return false;
-    set({
-      currentPlayerId: state.savedPlayerData.id,
-      isAuthenticated: false,
-      isAdmin: false,
-    });
-    return true;
-  },
-
-  setCurrentPlayer: (id: string) => {
-    const state = get();
-    const playerData = id ? state.players.find(p => p.id === id) || null : null;
-    set({
-      currentPlayerId: id || null,
-      isAuthenticated: false,
-      isAdmin: false,
-      savedPlayerData: playerData,
-    });
-  },
-
-  createDeal: async (sellerId: string, buyerId: string, goods: string, quantity: number, amount: number) => {
-    const state = get();
-    if (!state.session) return;
-
-    const dealId = generateId();
-    const deal: Deal = {
-      id: dealId,
-      sellerId,
-      buyerId,
-      goods,
-      quantity,
-      amount,
-      timestamp: Date.now(),
-      status: 'pending',
-      sellerConfirmed: false,
-      buyerConfirmed: false,
-    };
-
-    try {
-      await supabase.from('deals').insert([{
-        id: dealId,
-        session_id: state.session.id,
-        seller_id: sellerId,
-        buyer_id: buyerId,
-        goods,
-        quantity,
-        amount,
-        status: 'pending',
-        seller_confirmed: false,
-        buyer_confirmed: false,
-      }]);
-    } catch (e) {
-      console.error('Create deal error:', e);
-    }
-
-    set((s) => ({ deals: [...s.deals, deal], pendingDeal: deal }));
-  },
-
-  confirmDeal: async (dealId: string, playerId: string) => {
-    const state = get();
-    const deal = state.deals.find(d => d.id === dealId);
-    if (!deal || !state.session) return;
-
-    const isSeller = deal.sellerId === playerId;
-    const isBuyer = deal.buyerId === playerId;
-    if (!isSeller && !isBuyer) return;
-
-    const updatedDeal = {
-      ...deal,
-      sellerConfirmed: isSeller ? true : deal.sellerConfirmed,
-      buyerConfirmed: isBuyer ? true : deal.buyerConfirmed,
-    };
-
-    const bothConfirmed = updatedDeal.sellerConfirmed && updatedDeal.buyerConfirmed;
-
-    try {
-      if (bothConfirmed) {
-        // Обновляем сделку
-        await supabase.from('deals').update({
-          status: 'confirmed',
-          seller_confirmed: true,
-          buyer_confirmed: true,
-        }).eq('id', dealId);
-
-        // Обновляем игроков
-        const seller = state.players.find(p => p.id === deal.sellerId);
-        const buyer = state.players.find(p => p.id === deal.buyerId);
-
-        if (seller) {
-          await supabase.from('players').update({
-            balance: seller.balance + deal.amount,
-            goods: { ...seller.goods, [deal.goods]: (seller.goods[deal.goods] || 0) - deal.quantity },
-            deals_count: seller.dealsCount + 1,
-          }).eq('id', seller.id);
-        }
-
-        if (buyer) {
-          await supabase.from('players').update({
-            balance: buyer.balance - deal.amount,
-            goods: { ...buyer.goods, [deal.goods]: (buyer.goods[deal.goods] || 0) + deal.quantity },
-            deals_count: buyer.dealsCount + 1,
-          }).eq('id', buyer.id);
-        }
-      } else {
-        await supabase.from('deals').update({
-          seller_confirmed: updatedDeal.sellerConfirmed,
-          buyer_confirmed: updatedDeal.buyerConfirmed,
-        }).eq('id', dealId);
-      }
-    } catch (e) {
-      console.error('Confirm deal error:', e);
-    }
-
-    // Обновляем локально
-    if (bothConfirmed) {
-      const players = state.players.map(p => {
-        if (p.id === deal.sellerId) {
-          return {
-            ...p,
-            balance: p.balance + deal.amount,
-            goods: { ...p.goods, [deal.goods]: (p.goods[deal.goods] || 0) - deal.quantity },
-            dealsCount: p.dealsCount + 1,
-          };
-        }
-        if (p.id === deal.buyerId) {
-          return {
-            ...p,
-            balance: p.balance - deal.amount,
-            goods: { ...p.goods, [deal.goods]: (p.goods[deal.goods] || 0) + deal.quantity },
-            dealsCount: p.dealsCount + 1,
-          };
-        }
-        return p;
-      });
-
-      const deals = state.deals.map(d =>
-        d.id === dealId ? { ...updatedDeal, status: 'confirmed' as const } : d
-      );
-
-      set({ players, deals, pendingDeal: null });
-    } else {
-      const deals = state.deals.map(d => d.id === dealId ? updatedDeal : d);
-      set({ deals });
-    }
-  },
-
-  rejectDeal: async (dealId: string) => {
-    const state = get();
-    try {
-      await supabase.from('deals').update({ status: 'rejected' }).eq('id', dealId);
-    } catch (e) {
-      console.error('Reject deal error:', e);
-    }
-    set((s) => ({
-      deals: s.deals.map(d => d.id === dealId ? { ...d, status: 'rejected' as const } : d),
-      pendingDeal: null,
-    }));
-  },
-
-  startPhase: async (duration: number) => {
-    const state = get();
-    if (!state.session) return;
-
-    const newPhase = state.session.phase + 1;
-    try {
-      await supabase.from('sessions').update({
-        phase: newPhase,
-        timer: duration,
-        phase_duration: duration,
-        status: 'active',
-      }).eq('id', state.session.id);
-    } catch (e) {
-      console.error('Start phase error:', e);
-    }
-
-    set((s) => ({
-      session: s.session ? {
-        ...s.session,
-        phase: newPhase,
-        timer: duration,
-        phaseDuration: duration,
-        status: 'active',
-      } : null,
-      timerRunning: true,
-    }));
-  },
-
-  pausePhase: async () => {
-    const state = get();
-    if (!state.session) return;
-    try {
-      await supabase.from('sessions').update({ status: 'paused' }).eq('id', state.session.id);
-    } catch (e) {
-      console.error('Pause phase error:', e);
-    }
-    set((s) => ({
-      timerRunning: false,
-      session: s.session ? { ...s.session, status: 'paused' } : null,
-    }));
-  },
-
-  resumePhase: async () => {
-    const state = get();
-    if (!state.session) return;
-    try {
-      await supabase.from('sessions').update({ status: 'active' }).eq('id', state.session.id);
-    } catch (e) {
-      console.error('Resume phase error:', e);
-    }
-    set((s) => ({
-      timerRunning: true,
-      session: s.session ? { ...s.session, status: 'active' } : null,
-    }));
-  },
-
-  endPhase: async () => {
-    const state = get();
-    if (!state.session) return;
-    try {
-      await supabase.from('sessions').update({ timer: 0, status: 'ended' }).eq('id', state.session.id);
-    } catch (e) {
-      console.error('End phase error:', e);
-    }
-    set((s) => ({
-      timerRunning: false,
-      session: s.session ? { ...s.session, timer: 0, status: 'ended' } : null,
-    }));
-    await get().paySalary();
-  },
-
-  tickTimer: () => {
-    set((state) => {
-      if (!state.timerRunning || !state.session || state.session.timer <= 0) return state;
-      const newTimer = state.session.timer - 1;
-      return {
-        session: { ...state.session, timer: newTimer },
-        timerRunning: newTimer > 0,
-      };
-    });
-  },
-
-  addEvent: async (event) => {
-    const state = get();
-    if (!state.session) return;
-
-    const newEvent: GameEvent = {
-      ...event,
-      id: generateId(),
-      timestamp: Date.now(),
-    };
-
-    try {
-      await supabase.from('events').insert([{
-        id: newEvent.id,
-        session_id: state.session.id,
-        title: event.title,
-        description: event.description,
-        type: event.type,
-      }]);
-    } catch (e) {
-      console.error('Add event error:', e);
-    }
-
-    set((s) => ({ events: [newEvent, ...s.events] }));
-  },
-
-  updateCurrencyRate: async (currency: string, rate: number) => {
-    const state = get();
-    if (!state.session) return;
-
-    const change = (() => {
-      const current = state.currencyRates.find(c => c.currency === currency);
-      return current ? ((rate - current.rate) / current.rate) * 100 : 0;
-    })();
-
-    try {
-      await supabase.from('currency_rates').upsert({
-        session_id: state.session.id,
-        currency,
-        rate,
-        change,
-      }, { onConflict: 'session_id,currency' });
-    } catch (e) {
-      console.error('Update currency rate error:', e);
-    }
-
-    set((s) => ({
-      currencyRates: s.currencyRates.map(c =>
-        c.currency === currency ? { ...c, rate, change } : c
-      ),
-    }));
-  },
-
-  setAdmin: (isAdmin: boolean) => set({ isAdmin }),
-
-  login: async (login: string, password: string) => {
-    const state = get();
-
-    // Сначала проверяем локальные креды
-    if (login === state.adminLogin && password === state.adminPassword) {
-      // Если есть активная сессия — проверяем её креды
-      if (state.session) {
-        try {
-          const { data } = await supabase
-            .from('sessions')
-            .select('admin_login, admin_password')
-            .eq('id', state.session.id)
-            .single();
-
-          if (data && (login !== data.admin_login || password !== data.admin_password)) {
-            return false;
+      endSession: () => {
+        const state = get();
+        set({
+          session: null,
+          timerRunning: false,
+          isAuthenticated: false,
+          isAdmin: false,
+          players: [],
+          deals: [],
+          events: [],
+          savedPlayerData: null,
+        });
+        
+        // Удаляем из Supabase
+        if (isSupabaseConfigured && state.session) {
+          const client = getSupabase();
+          if (client) {
+            client.from('sessions').delete().eq('id', state.session.id).then();
           }
-        } catch (e) {
-          // Игнорируем ошибки
         }
-      }
+      },
 
-      set({ isAuthenticated: true, isAdmin: true, currentPlayerId: null });
-      return true;
+      restoreSession: () => {
+        const state = get();
+        if (!state.savedPlayerData || !state.session) return false;
+        const playerExists = state.players.find(p => p.id === state.savedPlayerData!.id);
+        if (!playerExists) {
+          set({ savedPlayerData: null, currentPlayerId: null });
+          return false;
+        }
+        if (state.session.status === 'ended') return false;
+        set({
+          currentPlayerId: state.savedPlayerData.id,
+          isAuthenticated: false,
+          isAdmin: false,
+        });
+        return true;
+      },
+
+      setCurrentPlayer: (id: string) => {
+        const state = get();
+        const playerData = id ? state.players.find(p => p.id === id) || null : null;
+        set({
+          currentPlayerId: id || null,
+          isAuthenticated: false,
+          isAdmin: false,
+          savedPlayerData: playerData,
+        });
+      },
+
+      createDeal: (sellerId: string, buyerId: string, goods: string, quantity: number, amount: number) => {
+        const deal: Deal = {
+          id: generateId(),
+          sellerId,
+          buyerId,
+          goods,
+          quantity,
+          amount,
+          timestamp: Date.now(),
+          status: 'pending',
+          sellerConfirmed: false,
+          buyerConfirmed: false,
+        };
+        set((state) => ({ deals: [...state.deals, deal], pendingDeal: deal }));
+        get().pushToSupabase();
+      },
+
+      confirmDeal: (dealId: string, playerId: string) => {
+        set((state) => {
+          const deal = state.deals.find(d => d.id === dealId);
+          if (!deal) return state;
+
+          const isSeller = deal.sellerId === playerId;
+          const isBuyer = deal.buyerId === playerId;
+          if (!isSeller && !isBuyer) return state;
+
+          const updatedDeal = {
+            ...deal,
+            sellerConfirmed: isSeller ? true : deal.sellerConfirmed,
+            buyerConfirmed: isBuyer ? true : deal.buyerConfirmed,
+          };
+
+          const bothConfirmed = updatedDeal.sellerConfirmed && updatedDeal.buyerConfirmed;
+
+          if (bothConfirmed) {
+            const players = state.players.map(p => {
+              if (p.id === deal.sellerId) {
+                return {
+                  ...p,
+                  balance: p.balance + deal.amount,
+                  goods: { ...p.goods, [deal.goods]: (p.goods[deal.goods] || 0) - deal.quantity },
+                  dealsCount: p.dealsCount + 1,
+                };
+              }
+              if (p.id === deal.buyerId) {
+                return {
+                  ...p,
+                  balance: p.balance - deal.amount,
+                  goods: { ...p.goods, [deal.goods]: (p.goods[deal.goods] || 0) + deal.quantity },
+                  dealsCount: p.dealsCount + 1,
+                };
+              }
+              return p;
+            });
+
+            const deals = state.deals.map(d =>
+              d.id === dealId ? { ...updatedDeal, status: 'confirmed' as const } : d
+            );
+
+            setTimeout(() => get().pushToSupabase(), 0);
+            return { players, deals, pendingDeal: null };
+          } else {
+            const deals = state.deals.map(d => d.id === dealId ? updatedDeal : d);
+            setTimeout(() => get().pushToSupabase(), 0);
+            return { deals };
+          }
+        });
+      },
+
+      rejectDeal: (dealId: string) => {
+        set((state) => ({
+          deals: state.deals.map(d =>
+            d.id === dealId ? { ...d, status: 'rejected' as const } : d
+          ),
+          pendingDeal: null,
+        }));
+        get().pushToSupabase();
+      },
+
+      startPhase: (duration: number) => {
+        set((state) => ({
+          session: state.session ? {
+            ...state.session,
+            phase: state.session.phase + 1,
+            timer: duration,
+            phaseDuration: duration,
+            status: 'active' as SessionStatus,
+          } : null,
+          timerRunning: true,
+        }));
+        get().pushToSupabase();
+      },
+
+      pausePhase: () => set((state) => ({
+        timerRunning: false,
+        session: state.session ? { ...state.session, status: 'paused' as SessionStatus } : null,
+      })),
+
+      resumePhase: () => set((state) => ({
+        timerRunning: true,
+        session: state.session ? { ...state.session, status: 'active' as SessionStatus } : null,
+      })),
+
+      endPhase: () => {
+        set((state) => ({
+          timerRunning: false,
+          session: state.session ? { ...state.session, timer: 0, status: 'ended' as SessionStatus } : null,
+        }));
+        get().paySalary();
+        get().pushToSupabase();
+      },
+
+      tickTimer: () => {
+        set((state) => {
+          if (!state.timerRunning || !state.session || state.session.timer <= 0) return state;
+          const newTimer = state.session.timer - 1;
+          return {
+            session: { ...state.session, timer: newTimer },
+            timerRunning: newTimer > 0,
+          };
+        });
+      },
+
+      addEvent: (event) => {
+        const newEvent: GameEvent = {
+          ...event,
+          id: generateId(),
+          timestamp: Date.now(),
+        };
+        set((state) => ({ events: [newEvent, ...state.events] }));
+        get().pushToSupabase();
+      },
+
+      updateCurrencyRate: (currency: string, rate: number) => {
+        set((state) => ({
+          currencyRates: state.currencyRates.map(c => {
+            if (c.currency === currency) {
+              const change = ((rate - c.rate) / c.rate) * 100;
+              return { ...c, rate, change };
+            }
+            return c;
+          }),
+        }));
+        get().pushToSupabase();
+      },
+
+      setAdmin: (isAdmin: boolean) => set({ isAdmin }),
+
+      login: (login: string, password: string) => {
+        const state = get();
+        if (login === state.adminLogin && password === state.adminPassword) {
+          set({ isAuthenticated: true, isAdmin: true, currentPlayerId: null });
+          return true;
+        }
+        return false;
+      },
+
+      logout: () => {
+        const state = get();
+        const playerData = state.currentPlayerId
+          ? state.players.find(p => p.id === state.currentPlayerId) || null
+          : null;
+        set({
+          isAuthenticated: false,
+          isAdmin: false,
+          currentPlayerId: null,
+          savedPlayerData: playerData,
+        });
+      },
+
+      setAdminCredentials: (login: string, password: string) => {
+        set({ adminLogin: login, adminPassword: password });
+      },
+
+      paySalary: () => {
+        set((state) => ({
+          players: state.players.map(p => {
+            if (p.dealsCount > 0) {
+              return { ...p, balance: p.balance + p.salary, dealsCount: 0 };
+            }
+            return p;
+          }),
+        }));
+      },
+
+      deposit: (playerId: string, amount: number) => {
+        set((state) => ({
+          players: state.players.map(p =>
+            p.id === playerId ? { ...p, balance: p.balance + amount } : p
+          ),
+        }));
+        get().pushToSupabase();
+      },
+
+      withdraw: (playerId: string, amount: number) => {
+        set((state) => ({
+          players: state.players.map(p =>
+            p.id === playerId ? { ...p, balance: p.balance - amount } : p
+          ),
+        }));
+        get().pushToSupabase();
+      },
+    }),
+    {
+      name: 'econom-strategy-storage',
+      storage: createJSONStorage(() => localStorage),
+      partialize: (state) => ({
+        session: state.session,
+        players: state.players,
+        deals: state.deals,
+        events: state.events,
+        currencyRates: state.currencyRates,
+        isAuthenticated: state.isAuthenticated,
+        adminLogin: state.adminLogin,
+        adminPassword: state.adminPassword,
+        currentPlayerId: state.currentPlayerId,
+        savedPlayerData: state.savedPlayerData,
+      }),
     }
-    return false;
-  },
-
-  logout: () => {
-    const state = get();
-    const playerData = state.currentPlayerId
-      ? state.players.find(p => p.id === state.currentPlayerId) || null
-      : null;
-    set({
-      isAuthenticated: false,
-      isAdmin: false,
-      currentPlayerId: null,
-      savedPlayerData: playerData,
-    });
-  },
-
-  setAdminCredentials: (login: string, password: string) => {
-    set({ adminLogin: login, adminPassword: password });
-  },
-
-  paySalary: async () => {
-    const state = get();
-    const playersToPay = state.players.filter(p => p.dealsCount > 0);
-
-    for (const p of playersToPay) {
-      try {
-        await supabase.from('players').update({
-          balance: p.balance + p.salary,
-          deals_count: 0,
-        }).eq('id', p.id);
-      } catch (e) {
-        console.error('Pay salary error:', e);
-      }
-    }
-
-    set((s) => ({
-      players: s.players.map(p =>
-        p.dealsCount > 0
-          ? { ...p, balance: p.balance + p.salary, dealsCount: 0 }
-          : p
-      ),
-    }));
-  },
-
-  deposit: async (playerId: string, amount: number) => {
-    const state = get();
-    const player = state.players.find(p => p.id === playerId);
-    if (!player) return;
-
-    try {
-      await supabase.from('players').update({
-        balance: player.balance + amount,
-      }).eq('id', playerId);
-    } catch (e) {
-      console.error('Deposit error:', e);
-    }
-
-    set((s) => ({
-      players: s.players.map(p =>
-        p.id === playerId ? { ...p, balance: p.balance + amount } : p
-      ),
-    }));
-  },
-
-  withdraw: async (playerId: string, amount: number) => {
-    const state = get();
-    const player = state.players.find(p => p.id === playerId);
-    if (!player) return;
-
-    try {
-      await supabase.from('players').update({
-        balance: player.balance - amount,
-      }).eq('id', playerId);
-    } catch (e) {
-      console.error('Withdraw error:', e);
-    }
-
-    set((s) => ({
-      players: s.players.map(p =>
-        p.id === playerId ? { ...p, balance: p.balance - amount } : p
-      ),
-    }));
-  },
-}));
+  )
+);

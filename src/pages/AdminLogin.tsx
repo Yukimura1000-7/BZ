@@ -12,7 +12,7 @@ export default function AdminLogin() {
   const { addToast } = useToastStore();
   const navigate = useNavigate();
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
@@ -21,7 +21,7 @@ export default function AdminLogin() {
       return;
     }
 
-    const success = await loginAction(login.trim(), password.trim());
+    const success = loginAction(login.trim(), password.trim());
     if (success) {
       addToast('Добро пожаловать, администратор!', 'success');
       navigate('/admin');
