@@ -1,10 +1,12 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useGameStore } from '../store/gameStore';
 import { Scan, Check, X, ArrowRight, AlertCircle } from 'lucide-react';
 
 export default function DealPage() {
   const { players, currentPlayerId, createDeal, confirmDeal, rejectDeal, deals } = useGameStore();
   const player = players.find(p => p.id === currentPlayerId);
+  const navigate = useNavigate();
   
   const [mode, setMode] = useState<'select' | 'create' | 'pending'>('select');
   const [selectedPlayer, setSelectedPlayer] = useState<string>('');
@@ -13,7 +15,27 @@ export default function DealPage() {
   const [amount, setAmount] = useState(0);
   const [error, setError] = useState('');
 
-  if (!player) return null;
+  if (!player) {
+    return (
+      <div className="min-h-[100dvh] flex flex-col items-center justify-center p-4 bg-gray-900">
+        <div className="max-w-sm w-full bg-gray-800 rounded-2xl p-6 border border-gray-700 text-center">
+          <div className="w-14 h-14 bg-red-500/20 rounded-full flex items-center justify-center mx-auto mb-3">
+            <span className="text-2xl">❌</span>
+          </div>
+          <h2 className="text-xl font-bold text-white mb-2">Игрок не найден</h2>
+          <p className="text-gray-400 text-sm mb-4">
+            Данные игрока не загружены. Вернитесь на главную и попробуйте снова.
+          </p>
+          <button
+            onClick={() => navigate('/')}
+            className="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-6 rounded-xl transition-all"
+          >
+            На главную
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const isBuyer = player.role === 'buyer';
   const isSeller = player.role === 'seller';

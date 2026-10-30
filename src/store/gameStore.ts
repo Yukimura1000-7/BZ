@@ -191,22 +191,34 @@ export const useGameStore = create<GameState>()(
             };
           }
 
-          if (playersRes.data) {
-            updates.players = playersRes.data.map((db: any) => ({
-              id: db.id,
-              name: db.name,
-              sessionId: db.session_id,
-              role: db.role,
-              balance: db.balance,
-              goods: db.goods,
-              qrCode: db.id,
-              dealsCount: db.deals_count,
-              salary: db.salary,
-              registered: true,
-            }));
+          // Игроки: не перезаписываем если из БД пусто, а локально есть данные
+          if (playersRes.data && playersRes.data.length > 0) {
+            updates.players = playersRes.data.map((db: any) => {
+              // Берём дополнительные данные из локального состояния если есть
+              const localPlayer = state.players.find(p => p.id === db.id);
+              return {
+                id: db.id,
+                name: db.name,
+                sessionId: db.session_id,
+                role: db.role,
+                balance: db.balance,
+                usefulnessPoints: db.usefulness_points ?? localPlayer?.usefulnessPoints ?? 0,
+                goods: db.goods,
+                qrCode: db.id,
+                dealsCount: db.deals_count ?? localPlayer?.dealsCount ?? 0,
+                salary: db.salary ?? localPlayer?.salary ?? 200,
+                registered: true,
+              };
+            });
+          } else if (playersRes.data && playersRes.data.length === 0 && state.players.length > 0) {
+            // В БД пусто, но локально есть игроки — не перезаписываем!
+            console.warn('⚠️ Supabase returned 0 players, but local has', state.players.length, '— keeping local data');
+          } else if (playersRes.data) {
+            updates.players = [];
           }
 
-          if (dealsRes.data) {
+          // Сделки: аналогичная защита
+          if (dealsRes.data && dealsRes.data.length > 0) {
             updates.deals = dealsRes.data.map((db: any) => ({
               id: db.id,
               sellerId: db.seller_id,
@@ -219,9 +231,14 @@ export const useGameStore = create<GameState>()(
               sellerConfirmed: db.seller_confirmed,
               buyerConfirmed: db.buyer_confirmed,
             }));
+          } else if (dealsRes.data && dealsRes.data.length === 0 && state.deals.length > 0) {
+            console.warn('⚠️ Supabase returned 0 deals, but local has', state.deals.length, '— keeping local data');
+          } else if (dealsRes.data) {
+            updates.deals = [];
           }
 
-          if (eventsRes.data) {
+          // События
+          if (eventsRes.data && eventsRes.data.length > 0) {
             updates.events = eventsRes.data.map((db: any) => ({
               id: db.id,
               title: db.title,
@@ -229,6 +246,10 @@ export const useGameStore = create<GameState>()(
               timestamp: new Date(db.created_at).getTime(),
               type: db.type,
             }));
+          } else if (eventsRes.data && eventsRes.data.length === 0 && state.events.length > 0) {
+            console.warn('⚠️ Supabase returned 0 events, but local has', state.events.length, '— keeping local data');
+          } else if (eventsRes.data) {
+            updates.events = [];
           }
 
           if (ratesRes.data && ratesRes.data.length > 0) {

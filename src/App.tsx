@@ -15,7 +15,11 @@ import StorageSync from './components/StorageSync';
 import SupabaseRealtime from './components/SupabaseRealtime';
 
 function App() {
-  const { currentPlayerId, isAdmin, isAuthenticated, session } = useGameStore();
+  const { currentPlayerId, isAdmin, isAuthenticated, session, players } = useGameStore();
+  
+  // Проверяем, что игрок действительно существует в массиве players
+  const currentPlayer = players.find(p => p.id === currentPlayerId);
+  const showNavigation = (currentPlayerId && currentPlayer) || isAdmin;
 
   return (
     <Router>
@@ -43,7 +47,7 @@ function App() {
             isAuthenticated && !currentPlayerId ? <MainScreen /> : <Navigate to="/" />
           } />
         </Routes>
-        {(currentPlayerId || isAdmin) && <Navigation />}
+        {showNavigation && <Navigation />}
       </div>
     </Router>
   );

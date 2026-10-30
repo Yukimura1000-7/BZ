@@ -5,11 +5,66 @@ import { Wallet, Package, TrendingUp, Clock, ArrowUpRight, ArrowDownRight, LogOu
 import CurrencyTicker from '../components/CurrencyTicker';
 
 export default function PlayerDashboard() {
-  const { players, currentPlayerId, deals, timerRunning, session, setCurrentPlayer } = useGameStore();
+  const { players, currentPlayerId, deals, timerRunning, session, setCurrentPlayer, savedPlayerData, restoreSession } = useGameStore();
   const player = players.find(p => p.id === currentPlayerId);
   const navigate = useNavigate();
 
-  if (!player || !session) return null;
+  // Если игрок не найден, но есть сохранённые данные — пытаемся восстановить
+  if (!player && savedPlayerData && session) {
+    return (
+      <div className="min-h-[100dvh] flex flex-col items-center justify-center p-4 bg-gray-900">
+        <div className="max-w-sm w-full bg-gray-800 rounded-2xl p-6 border border-gray-700 text-center">
+          <div className="w-14 h-14 bg-blue-500/20 rounded-full flex items-center justify-center mx-auto mb-3">
+            <span className="text-2xl">🔄</span>
+          </div>
+          <h2 className="text-xl font-bold text-white mb-2">Восстановление сессии</h2>
+          <p className="text-gray-400 text-sm mb-4">
+            Данные игрока не загружены. Попробуйте восстановить сессию.
+          </p>
+          <button
+            onClick={() => {
+              const success = restoreSession();
+              if (success) {
+                navigate('/player');
+              }
+            }}
+            className="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-6 rounded-xl transition-all mb-2"
+          >
+            Восстановить
+          </button>
+          <button
+            onClick={() => navigate('/')}
+            className="w-full text-gray-400 hover:text-white text-sm py-2 transition-colors"
+          >
+            На главную
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Если игрок не найден и нет сохранённых данных — редирект на главную
+  if (!player || !session) {
+    return (
+      <div className="min-h-[100dvh] flex flex-col items-center justify-center p-4 bg-gray-900">
+        <div className="max-w-sm w-full bg-gray-800 rounded-2xl p-6 border border-gray-700 text-center">
+          <div className="w-14 h-14 bg-red-500/20 rounded-full flex items-center justify-center mx-auto mb-3">
+            <span className="text-2xl">❌</span>
+          </div>
+          <h2 className="text-xl font-bold text-white mb-2">Сессия не найдена</h2>
+          <p className="text-gray-400 text-sm mb-4">
+            {!session ? 'Нет активной сессии' : 'Игрок не найден в сессии'}
+          </p>
+          <button
+            onClick={() => navigate('/')}
+            className="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-3 px-6 rounded-xl transition-all"
+          >
+            На главную
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const timer = session.timer;
   const phase = session.phase;
