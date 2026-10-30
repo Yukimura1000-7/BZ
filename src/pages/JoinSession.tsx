@@ -3,15 +3,16 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useGameStore } from '../store/gameStore';
 import { useToastStore } from '../store/toastStore';
 import { QRCodeSVG } from 'qrcode.react';
-import { UserPlus, ArrowRight, AlertCircle } from 'lucide-react';
+import { UserPlus, ArrowRight, AlertCircle, Wifi, WifiOff, Info, RefreshCw } from 'lucide-react';
 
 export default function JoinSession() {
   const [name, setName] = useState('');
   const [sessionCode, setSessionCode] = useState('');
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
   const [joinedPlayer, setJoinedPlayer] = useState<any>(null);
   const { code } = useParams<{ code: string }>();
-  const { session, players, joinSession, setCurrentPlayer, loadSessionByCode } = useGameStore();
+  const { session, players, joinSession, setCurrentPlayer, loadSessionByCode, isSupabaseConnected } = useGameStore();
   const { addToast } = useToastStore();
   const navigate = useNavigate();
 
@@ -36,16 +37,24 @@ export default function JoinSession() {
       return;
     }
 
+    setLoading(true);
+    setError('');
+
     let currentSession = session;
 
-    // Если сессии нет локально — пробуем загрузить из Supabase
-    if (!currentSession) {
-      console.log('🎯 No local session, trying to load from Supabase...');
+    // Если сессии нет локально или код не совпадает — пробуем загрузить
+    if (!currentSession || currentSession.code !== sessionCode.toUpperCase()) {
+      console.log('🎯 No matching local session, trying to load...');
       const loaded = await loadSessionByCode(sessionCode.toUpperCase());
       console.log('🎯 Loaded session:', loaded);
       
       if (!loaded) {
-        setError('Сессия не найдена. Проверьте код или попросите администратора создать сессию.');
+        if (!isSupabaseConnected) {
+          setError('Сервер синхронизации не подключён. Сессия должна быть создана на этом устройстве. Попросите администратора создать сессию здесь, или настройте Supabase для работы между устройствами.');
+        } else {
+          setError('Сессия не найдена. Проверьте код или попросите администратора создать сессию.');
+        }
+        setLoading(false);
         return;
       }
       currentSession = loaded;
@@ -54,14 +63,17 @@ export default function JoinSession() {
     // Проверяем код
     if (!currentSession) {
       setError('Сессия не найдена');
+      setLoading(false);
       return;
     }
     if (currentSession.code !== sessionCode.toUpperCase()) {
       setError('Неверный код сессии');
+      setLoading(false);
       return;
     }
     if (currentSession.status === 'ended') {
       setError('Сессия завершена');
+      setLoading(false);
       return;
     }
 
@@ -75,6 +87,7 @@ export default function JoinSession() {
       setError('Не удалось подключиться к сессии');
       addToast('Ошибка подключения', 'error');
     }
+    setLoading(false);
   };
 
   const handleEnterGame = () => {
@@ -142,6 +155,25 @@ export default function JoinSession() {
           <p className="text-gray-400 mt-1 text-sm">Введите код сессии и ваше имя</p>
         </div>
 
+        {/* Connection status */}
+        <div className={`mb-4 rounded-xl p-3 flex items-center gap-2 text-sm ${
+          isSupabaseConnected 
+            ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-400' 
+            : 'bg-amber-500/10 border border-amber-500/30 text-amber-400'
+        }`}>
+          {isSupabaseConnected ? (
+            <>
+              <Wifi size={16} className="flex-shrink-0" />
+              <span>Сервер подключён — поиск сессий на всех устройствах</span>
+            </>
+          ) : (
+            <>
+              <WifiOff size={16} className="flex-shrink-0" />
+              <span>Локальный режим — сессия должна быть создана на этом устройстве</span>
+            </>
+          )}
+        </div>
+
         <div className="bg-gray-800 rounded-2xl p-5 shadow-2xl border border-gray-700">
           <div className="space-y-4">
             <div>
@@ -164,7 +196,7 @@ export default function JoinSession() {
                 onChange={(e) => { setName(e.target.value); setError(''); }}
                 placeholder="Введите имя..."
                 className="w-full bg-gray-700 border border-gray-600 rounded-xl px-4 py-3 text-white placeholder-gray-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition-all"
-                onKeyDown={(e) => e.key === 'Enter' && handleJoin()}
+                onKeyDown={(e) => e.key === 'Enter' && !loading && handleJoin()}
               />
             </div>
 
@@ -177,11 +209,20 @@ export default function JoinSession() {
 
             <button
               onClick={handleJoin}
-              disabled={!name.trim() || !sessionCode.trim()}
+              disabled={!name.trim() || !sessionCode.trim() || loading}
               className="w-full bg-blue-500 hover:bg-blue-600 active:bg-blue-700 disabled:bg-gray-600 disabled:text-gray-400 text-white font-bold py-3 px-6 rounded-xl transition-all flex items-center justify-center gap-2"
             >
-              <UserPlus size={18} />
-              Подключиться
+              {loading ? (
+                <>
+                  <RefreshCw size={18} className="animate-spin" />
+                  Поиск сессии...
+                </>
+              ) : (
+                <>
+                  <UserPlus size={18} />
+                  Подключиться
+                </>
+              )}
             </button>
           </div>
 
@@ -193,9 +234,29 @@ export default function JoinSession() {
           </button>
         </div>
 
-        {session && (
+        {/* Help section */}
+        {!isSupabaseConnected && (
+          <div className="mt-4 bg-blue-500/5 rounded-xl p-4 border border-blue-500/20">
+            <div className="flex items-start gap-2">
+              <Info size={16} className="text-blue-400 flex-shrink-0 mt-0.5" />
+              <div className="text-sm">
+                <p className="text-blue-300 font-medium mb-1">Как подключиться?</p>
+                <ol className="text-gray-400 space-y-1 list-decimal list-inside">
+                  <li>Администратор создаёт сессию на этом устройстве</li>
+                  <li>Вам сообщают код сессии</li>
+                  <li>Вы вводите код и имя выше</li>
+                </ol>
+                <p className="text-gray-500 text-xs mt-2">
+                  💡 Для работы между разными устройствами администратору нужно настроить Supabase.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {session && session.code === sessionCode.toUpperCase() && (
           <div className="mt-4 bg-gray-800/50 rounded-xl p-4 border border-gray-700 text-center">
-            <p className="text-gray-400 text-xs">Активная сессия</p>
+            <p className="text-gray-400 text-xs">Найдена сессия на этом устройстве</p>
             <p className="text-white font-semibold mt-1">{session.name}</p>
             <p className="text-gray-500 text-xs mt-1">Игроков: {players.length}</p>
           </div>

@@ -1,12 +1,14 @@
 import { useNavigate } from 'react-router-dom';
-import { UserPlus, Lock, Link as LinkIcon, RotateCcw } from 'lucide-react';
+import { UserPlus, Lock, Link as LinkIcon, RotateCcw, HelpCircle } from 'lucide-react';
 import { useGameStore } from '../store/gameStore';
 import { useToastStore } from '../store/toastStore';
+import { useState } from 'react';
 
 export default function Registration() {
   const navigate = useNavigate();
   const { savedPlayerData, session, restoreSession, isSupabaseConnected } = useGameStore();
   const { addToast } = useToastStore();
+  const [showHelp, setShowHelp] = useState(false);
 
   const handleRestoreSession = () => {
     const success = restoreSession();
@@ -62,7 +64,7 @@ export default function Registration() {
             Присоединиться к игре
           </h2>
           <p className="text-gray-400 text-sm mb-3">
-            Отсканируйте QR-код или введите код сессии от организатора
+            Введите код сессии от организатора
           </p>
           <button
             onClick={() => navigate('/join')}
@@ -76,20 +78,63 @@ export default function Registration() {
         {/* Admin login */}
         <button
           onClick={() => navigate('/admin-login')}
-          className="w-full bg-gray-800 hover:bg-gray-700 active:bg-gray-600 border border-gray-700 text-gray-300 font-medium py-3 px-4 rounded-xl transition-all flex items-center justify-center gap-2"
+          className="w-full bg-gray-800 hover:bg-gray-700 active:bg-gray-600 border border-gray-700 text-gray-300 font-medium py-3 px-4 rounded-xl transition-all flex items-center justify-center gap-2 mb-4"
         >
           <Lock size={16} className="text-white" />
           Вход для администратора
         </button>
 
+        {/* Help toggle */}
+        <button
+          onClick={() => setShowHelp(!showHelp)}
+          className="w-full text-gray-500 hover:text-gray-300 text-sm py-2 transition-colors flex items-center justify-center gap-1 mb-4"
+        >
+          <HelpCircle size={14} />
+          {showHelp ? 'Скрыть справку' : 'Не получается подключиться?'}
+        </button>
+
+        {/* Help section */}
+        {showHelp && (
+          <div className="bg-gray-800/80 rounded-xl p-4 border border-gray-700 mb-4 animate-fade-in">
+            <h3 className="text-white font-semibold text-sm mb-3 flex items-center gap-2">
+              <HelpCircle size={14} className="text-blue-400" />
+              Частые проблемы
+            </h3>
+            <div className="space-y-3 text-sm">
+              <div className="bg-gray-700/50 rounded-lg p-3">
+                <p className="text-yellow-400 font-medium mb-1">❌ «Сессия не найдена»</p>
+                <p className="text-gray-400 text-xs">
+                  {!isSupabaseConnected 
+                    ? 'Сервер синхронизации не подключён. Сессия должна быть создана на ЭТОМ устройстве. Попросите администратора открыть эту страницу на вашем устройстве и создать сессию.'
+                    : 'Сессия с таким кодом не существует. Убедитесь, что код введён правильно (без пробелов), и что сессия ещё не завершена.'}
+                </p>
+              </div>
+              <div className="bg-gray-700/50 rounded-lg p-3">
+                <p className="text-blue-400 font-medium mb-1">💡 Как создать сессию?</p>
+                <p className="text-gray-400 text-xs">
+                  Администратор нажимает «Вход для администратора» → создаёт сессию → сообщает вам 6-значный код.
+                </p>
+              </div>
+              {!isSupabaseConnected && (
+                <div className="bg-amber-500/10 rounded-lg p-3 border border-amber-500/20">
+                  <p className="text-amber-400 font-medium mb-1">⚠️ Локальный режим</p>
+                  <p className="text-gray-400 text-xs">
+                    Приложение работает без сервера. Все участники должны использовать одно устройство или настроить Supabase для работы между устройствами.
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Supabase status indicator */}
-        <div className={`mt-6 text-center text-xs px-3 py-2 rounded-lg ${
+        <div className={`text-center text-xs px-3 py-2 rounded-lg ${
           isSupabaseConnected 
             ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-400' 
             : 'bg-yellow-500/10 border border-yellow-500/30 text-yellow-400'
         }`}>
           {isSupabaseConnected 
-            ? '✅ Supabase подключен — синхронизация между устройствами активна' 
+            ? '✅ Сервер подключён — синхронизация между устройствами активна' 
             : '⚠️ Локальный режим — работает только на этом устройстве. Для мультидевайс режима настройте Supabase.'}
         </div>
       </div>

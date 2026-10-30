@@ -343,8 +343,35 @@ export const useGameStore = create<GameState>()(
         console.log('🔍 Loading session by code:', code);
         console.log('🔍 isSupabaseConfigured:', isSupabaseConfigured);
         
+        const upperCode = code.toUpperCase();
+
+        // 1. Сначала ищем в localStorage (для случая, когда сессия создана на этом же устройстве)
+        try {
+          const storageKey = 'econom-strategy-storage';
+          const rawStorage = localStorage.getItem(storageKey);
+          if (rawStorage) {
+            const parsed = JSON.parse(rawStorage);
+            const state = parsed?.state;
+            if (state?.session && state.session.code === upperCode) {
+              console.log('✅ Session found in localStorage:', state.session.code);
+              const session = state.session as Session;
+              set({
+                session,
+                players: state.players || [],
+                deals: state.deals || [],
+                events: state.events || [],
+                currencyRates: state.currencyRates || initialCurrencyRates,
+              });
+              return session;
+            }
+          }
+        } catch (e) {
+          console.warn('⚠️ Error reading localStorage:', e);
+        }
+
+        // 2. Если Supabase не настроен — сессию не найти на другом устройстве
         if (!isSupabaseConfigured) {
-          console.error('❌ Supabase not configured');
+          console.error('❌ Supabase not configured — cannot search remote sessions');
           return null;
         }
         
@@ -357,12 +384,12 @@ export const useGameStore = create<GameState>()(
         }
 
         try {
-          // Ищем сессию по коду
+          // Ищем сессию по коду в Supabase
           console.log('🔍 Querying sessions table...');
           const { data: sessionData, error } = await client
             .from('sessions')
             .select('*')
-            .eq('code', code.toUpperCase())
+            .eq('code', upperCode)
             .single();
 
           console.log('🔍 Query result:', { sessionData, error });
