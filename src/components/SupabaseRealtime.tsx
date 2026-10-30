@@ -11,6 +11,8 @@ export default function SupabaseRealtime() {
     const client = getSupabase();
     if (!client) return;
 
+    console.log('📡 SupabaseRealtime: subscribing to changes for session', session.id);
+
     const channels = [
       'sessions',
       'players',
@@ -26,7 +28,8 @@ export default function SupabaseRealtime() {
           schema: 'public',
           table,
           filter: `${filterCol}=eq.${session.id}`,
-        }, () => {
+        }, (payload) => {
+          console.log('🔔 Realtime event:', table, payload.eventType);
           syncFromSupabase();
         })
         .subscribe();
@@ -40,6 +43,8 @@ export default function SupabaseRealtime() {
   // Периодическая синхронизация (fallback)
   useEffect(() => {
     if (!session || !isSupabaseConfigured) return;
+
+    console.log('⏰ SupabaseRealtime: starting periodic sync (every 5s)');
 
     const interval = setInterval(() => {
       syncFromSupabase();

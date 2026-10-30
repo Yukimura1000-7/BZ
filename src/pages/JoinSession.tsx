@@ -78,7 +78,7 @@ export default function JoinSession() {
       return;
     }
 
-    const player = joinSession(currentSession.id, name.trim());
+    const player = await joinSession(currentSession.id, name.trim());
     if (player) {
       setJoinedPlayer(player);
       setError('');

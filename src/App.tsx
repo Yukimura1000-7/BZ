@@ -13,6 +13,7 @@ import ToastContainer from './components/ToastContainer';
 import CurrencyUpdater from './components/CurrencyUpdater';
 import StorageSync from './components/StorageSync';
 import SupabaseRealtime from './components/SupabaseRealtime';
+import SessionInitializer from './components/SessionInitializer';
 
 function App() {
   const { currentPlayerId, isAdmin, isAuthenticated, session, players } = useGameStore();
@@ -23,6 +24,7 @@ function App() {
 
   return (
     <Router>
+      <SessionInitializer />
       <TimerEffect />
       <CurrencyUpdater />
       <StorageSync />

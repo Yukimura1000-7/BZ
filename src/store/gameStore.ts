@@ -91,7 +91,7 @@ interface GameState {
   // Session actions
   createSession: (name?: string) => Promise<Session>;
   loadSessionByCode: (code: string) => Promise<Session | null>;
-  joinSession: (sessionId: string, playerName: string) => Player | null;
+  joinSession: (sessionId: string, playerName: string) => Promise<Player | null>;
   leaveSession: () => void;
   endSession: () => void;
   restoreSession: () => boolean;
@@ -167,6 +167,9 @@ export const useGameStore = create<GameState>()(
         const state = get();
         if (!state.session) return;
 
+        console.log('🔄 syncFromSupabase: starting sync for session', state.session.id);
+        console.log('🔄 Local state: players=', state.players.length, 'currentPlayerId=', state.currentPlayerId);
+
         try {
           const [sessionRes, playersRes, dealsRes, eventsRes, ratesRes] = await Promise.all([
             client.from('sessions').select('*').eq('id', state.session.id).single(),
@@ -175,6 +178,8 @@ export const useGameStore = create<GameState>()(
             client.from('events').select('*').eq('session_id', state.session.id).order('created_at', { ascending: false }),
             client.from('currency_rates').select('*').eq('session_id', state.session.id),
           ]);
+
+          console.log('📥 Supabase response: players=', playersRes.data?.length, 'deals=', dealsRes.data?.length);
 
           const updates: any = {};
 
@@ -210,6 +215,18 @@ export const useGameStore = create<GameState>()(
                 registered: true,
               };
             });
+            
+            // Защита: если currentPlayerId есть локально, но его нет в данных из Supabase — добавляем из локальных
+            if (state.currentPlayerId) {
+              const currentPlayerInRemote = updates.players.find((p: any) => p.id === state.currentPlayerId);
+              if (!currentPlayerInRemote) {
+                const localCurrentPlayer = state.players.find(p => p.id === state.currentPlayerId);
+                if (localCurrentPlayer) {
+                  console.warn('⚠️ currentPlayerId not in Supabase data — adding from local:', localCurrentPlayer.name);
+                  updates.players.push(localCurrentPlayer);
+                }
+              }
+            }
           } else if (playersRes.data && playersRes.data.length === 0 && state.players.length > 0) {
             // В БД пусто, но локально есть игроки — не перезаписываем!
             console.warn('⚠️ Supabase returned 0 players, but local has', state.players.length, '— keeping local data');
@@ -260,6 +277,13 @@ export const useGameStore = create<GameState>()(
             }));
           }
 
+          console.log('📝 Applying updates to store:', {
+            keys: Object.keys(updates),
+            playersCount: updates.players?.length,
+            currentPlayerId: state.currentPlayerId,
+            playerIds: updates.players?.map((p: any) => p.id),
+          });
+          
           set(updates);
         } catch (e) {
           console.error('Sync from Supabase error:', e);
@@ -538,10 +562,18 @@ export const useGameStore = create<GameState>()(
         }
       },
 
-      joinSession: (sessionId: string, playerName: string) => {
+      joinSession: async (sessionId: string, playerName: string) => {
         const state = get();
-        if (!state.session || state.session.id !== sessionId) return null;
-        if (state.session.status === 'ended') return null;
+        console.log('🎮 joinSession called:', { sessionId, playerName, currentSession: state.session?.id });
+        
+        if (!state.session || state.session.id !== sessionId) {
+          console.error('❌ joinSession: session mismatch', { sessionId, currentSession: state.session?.id });
+          return null;
+        }
+        if (state.session.status === 'ended') {
+          console.error('❌ joinSession: session ended');
+          return null;
+        }
 
         const id = generateId();
         const role: PlayerRole = Math.random() < 0.6 ? 'buyer' : 'seller';
@@ -558,6 +590,9 @@ export const useGameStore = create<GameState>()(
           salary: 200,
           registered: true,
         };
+        
+        console.log('✅ Creating player:', player);
+        
         set((s) => ({ 
           players: [...s.players, player], 
           currentPlayerId: id,
@@ -566,8 +601,12 @@ export const useGameStore = create<GameState>()(
           savedPlayerData: player,
         }));
         
-        // Push в Supabase
-        get().pushToSupabase();
+        console.log('✅ Player added to store. Total players:', get().players.length);
+        
+        // Push в Supabase и ждём завершения
+        console.log('📤 Pushing player to Supabase...');
+        await get().pushToSupabase();
+        console.log('✅ Player pushed to Supabase');
         
         return player;
       },

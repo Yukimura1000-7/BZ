@@ -9,6 +9,14 @@ export default function PlayerDashboard() {
   const player = players.find(p => p.id === currentPlayerId);
   const navigate = useNavigate();
 
+  console.log('🎮 PlayerDashboard render:', {
+    currentPlayerId,
+    playersCount: players.length,
+    playerFound: !!player,
+    hasSession: !!session,
+    hasSavedPlayerData: !!savedPlayerData,
+  });
+
   // Если игрок не найден, но есть сохранённые данные — пытаемся восстановить
   if (!player && savedPlayerData && session) {
     return (
