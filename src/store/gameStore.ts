@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
+import { v4 as uuidv4 } from 'uuid';
 import { getSupabase, isSupabaseConfigured } from '../lib/supabase';
 
 export type PlayerRole = 'buyer' | 'seller';
@@ -130,7 +131,7 @@ interface GameState {
   pushToSupabase: () => Promise<void>;
 }
 
-const generateId = () => Math.random().toString(36).substr(2, 9);
+const generateId = () => uuidv4();
 const generateSessionCode = () => Math.random().toString(36).substr(2, 6).toUpperCase();
 
 const initialCurrencyRates: CurrencyRate[] = [
