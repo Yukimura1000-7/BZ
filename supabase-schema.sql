@@ -19,6 +19,7 @@ CREATE TABLE players (
   name VARCHAR(255) NOT NULL,
   role VARCHAR(10) NOT NULL CHECK (role IN ('buyer', 'seller')),
   balance INTEGER NOT NULL DEFAULT 1000,
+  usefulness_points INTEGER NOT NULL DEFAULT 0,
   goods JSONB NOT NULL DEFAULT '{"Нефть": 0, "Зерно": 5, "Металл": 0, "Техника": 0, "Лекарства": 0}',
   deals_count INTEGER NOT NULL DEFAULT 0,
   salary INTEGER NOT NULL DEFAULT 200,

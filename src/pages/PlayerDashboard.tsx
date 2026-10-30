@@ -71,10 +71,19 @@ export default function PlayerDashboard() {
           <div className="bg-gray-800 rounded-xl p-3 sm:p-4 border border-gray-700 shadow-lg">
             <div className="flex items-center gap-1.5 mb-1.5">
               <Wallet size={14} className="text-blue-400" />
-              <span className="text-gray-400 text-xs">Баланс</span>
+              <span className="text-gray-400 text-xs">{isBuyer ? 'Баланс' : 'Капитал'}</span>
             </div>
             <p className="text-lg sm:text-xl font-bold text-white">{player.balance} <span className="text-xs sm:text-sm text-gray-400">₽</span></p>
           </div>
+          {isBuyer && (
+            <div className="bg-gradient-to-br from-blue-600 to-purple-600 rounded-xl p-3 sm:p-4 border border-blue-500 shadow-lg">
+              <div className="flex items-center gap-1.5 mb-1.5">
+                <TrendingUp size={14} className="text-white" />
+                <span className="text-blue-100 text-xs">Очки полезности</span>
+              </div>
+              <p className="text-lg sm:text-xl font-bold text-white">{player.usefulnessPoints}</p>
+            </div>
+          )}
           <div className="bg-gray-800 rounded-xl p-3 sm:p-4 border border-gray-700 shadow-lg">
             <div className="flex items-center gap-1.5 mb-1.5">
               <Package size={14} className="text-blue-400" />

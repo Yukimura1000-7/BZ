@@ -22,6 +22,11 @@ export default function JoinSession() {
   }, [code]);
 
   const handleJoin = async () => {
+    console.log('🎯 handleJoin called');
+    console.log('🎯 name:', name);
+    console.log('🎯 sessionCode:', sessionCode);
+    console.log('🎯 local session:', session);
+    
     if (!name.trim()) {
       setError('Введите имя');
       return;
@@ -35,9 +40,12 @@ export default function JoinSession() {
 
     // Если сессии нет локально — пробуем загрузить из Supabase
     if (!currentSession) {
+      console.log('🎯 No local session, trying to load from Supabase...');
       const loaded = await loadSessionByCode(sessionCode.toUpperCase());
+      console.log('🎯 Loaded session:', loaded);
+      
       if (!loaded) {
-        setError('Сессия не найдена. Попросите администратора создать сессию.');
+        setError('Сессия не найдена. Проверьте код или попросите администратора создать сессию.');
         return;
       }
       currentSession = loaded;
@@ -130,7 +138,7 @@ export default function JoinSession() {
           <div className="w-16 h-16 bg-gradient-to-br from-blue-500 to-red-500 rounded-2xl flex items-center justify-center mx-auto mb-3 shadow-lg shadow-blue-500/20">
             <span className="text-3xl">🔗</span>
           </div>
-          <h1 className="text-2xl font-bold text-white">Подключение к игре</h1>
+          <h1 className="text-2xl font-bold text-white">Битва за капитал</h1>
           <p className="text-gray-400 mt-1 text-sm">Введите код сессии и ваше имя</p>
         </div>
 

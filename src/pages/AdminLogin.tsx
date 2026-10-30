@@ -38,8 +38,8 @@ export default function AdminLogin() {
           <div className="w-16 h-16 bg-gradient-to-br from-blue-500 to-red-500 rounded-2xl flex items-center justify-center mx-auto mb-3 shadow-lg shadow-blue-500/20">
             <Shield size={32} className="text-white" />
           </div>
-          <h1 className="text-2xl font-bold text-white">Вход для администратора</h1>
-          <p className="text-gray-400 mt-1 text-sm">Введите учетные данные</p>
+          <h1 className="text-2xl font-bold text-white">Битва за капитал</h1>
+          <p className="text-gray-400 mt-1 text-sm">Вход для администратора</p>
         </div>
 
         <form onSubmit={handleSubmit} className="bg-gray-800 rounded-2xl p-5 shadow-2xl border border-gray-700">

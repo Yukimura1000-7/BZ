@@ -10,6 +10,7 @@ export interface Player {
   sessionId: string;
   role: PlayerRole;
   balance: number;
+  usefulnessPoints: number; // Очки полезности для покупателей
   goods: Record<string, number>;
   qrCode: string;
   dealsCount: number;
@@ -271,6 +272,7 @@ export const useGameStore = create<GameState>()(
               name: p.name,
               role: p.role,
               balance: p.balance,
+              usefulness_points: p.usefulnessPoints,
               goods: p.goods,
               deals_count: p.dealsCount,
               salary: p.salary,
@@ -338,20 +340,40 @@ export const useGameStore = create<GameState>()(
       },
 
       loadSessionByCode: async (code: string) => {
-        if (!isSupabaseConfigured) return null;
+        console.log('🔍 Loading session by code:', code);
+        console.log('🔍 isSupabaseConfigured:', isSupabaseConfigured);
+        
+        if (!isSupabaseConfigured) {
+          console.error('❌ Supabase not configured');
+          return null;
+        }
+        
         const client = getSupabase();
-        if (!client) return null;
+        console.log('🔍 Supabase client:', client);
+        
+        if (!client) {
+          console.error('❌ Supabase client is null');
+          return null;
+        }
 
         try {
           // Ищем сессию по коду
+          console.log('🔍 Querying sessions table...');
           const { data: sessionData, error } = await client
             .from('sessions')
             .select('*')
             .eq('code', code.toUpperCase())
             .single();
 
-          if (error || !sessionData) {
-            console.error('Session not found:', error);
+          console.log('🔍 Query result:', { sessionData, error });
+
+          if (error) {
+            console.error('❌ Session query error:', error);
+            return null;
+          }
+          
+          if (!sessionData) {
+            console.error('❌ Session not found in database');
             return null;
           }
 
@@ -381,6 +403,7 @@ export const useGameStore = create<GameState>()(
             sessionId: db.session_id,
             role: db.role,
             balance: db.balance,
+            usefulnessPoints: db.usefulness_points || 0,
             goods: db.goods,
             qrCode: db.id,
             dealsCount: db.deals_count,
@@ -445,6 +468,7 @@ export const useGameStore = create<GameState>()(
           sessionId,
           role,
           balance: 1000,
+          usefulnessPoints: 0,
           goods: { 'Нефть': 0, 'Зерно': 5, 'Металл': 0, 'Техника': 0, 'Лекарства': 0 },
           qrCode: id,
           dealsCount: 0,
@@ -556,6 +580,7 @@ export const useGameStore = create<GameState>()(
           if (bothConfirmed) {
             const players = state.players.map(p => {
               if (p.id === deal.sellerId) {
+                // Продавец получает деньги
                 return {
                   ...p,
                   balance: p.balance + deal.amount,
@@ -564,9 +589,11 @@ export const useGameStore = create<GameState>()(
                 };
               }
               if (p.id === deal.buyerId) {
+                // Покупатель получает очки полезности (равные сумме сделки) и товары
                 return {
                   ...p,
                   balance: p.balance - deal.amount,
+                  usefulnessPoints: p.usefulnessPoints + deal.amount,
                   goods: { ...p.goods, [deal.goods]: (p.goods[deal.goods] || 0) + deal.quantity },
                   dealsCount: p.dealsCount + 1,
                 };

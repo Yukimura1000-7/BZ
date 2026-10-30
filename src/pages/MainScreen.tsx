@@ -24,7 +24,7 @@ export default function MainScreen() {
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
   };
 
-  const buyers = [...players].filter(p => p.role === 'buyer').sort((a, b) => b.balance - a.balance);
+  const buyers = [...players].filter(p => p.role === 'buyer').sort((a, b) => b.usefulnessPoints - a.usefulnessPoints);
   const sellers = [...players].filter(p => p.role === 'seller').sort((a, b) => b.balance - a.balance);
   const buyersCount = buyers.length;
   const sellersCount = sellers.length;
@@ -39,7 +39,7 @@ export default function MainScreen() {
       <div className="flex items-start justify-between mb-4 sm:mb-6 gap-2">
         <div className="min-w-0 flex-1">
           <h1 className="text-xl sm:text-3xl font-bold text-white flex items-center gap-2">
-            💰 ЭкономСтратегия
+            💰 Битва за капитал
           </h1>
           <p className="text-gray-400 text-xs sm:text-sm mt-1 truncate">{session.name}</p>
         </div>
@@ -122,6 +122,7 @@ export default function MainScreen() {
               🛒 Покупатели
               <span className="text-blue-400 text-sm font-normal">({buyersCount})</span>
             </h2>
+            <p className="text-blue-300 text-xs mb-3">Рейтинг по очкам полезности</p>
             {buyers.length === 0 ? (
               <div className="text-center py-8 sm:py-12">
                 <p className="text-gray-500 text-sm sm:text-lg">Нет покупателей</p>
@@ -129,8 +130,8 @@ export default function MainScreen() {
             ) : (
               <div className="space-y-1.5 sm:space-y-2">
                 {buyers.map((player, index) => {
-                  const maxBalance = buyers[0]?.balance || 1;
-                  const widthPercent = (player.balance / maxBalance) * 100;
+                  const maxPoints = buyers[0]?.usefulnessPoints || 1;
+                  const widthPercent = (player.usefulnessPoints / maxPoints) * 100;
                   
                   return (
                     <div key={player.id} className="relative">
@@ -149,7 +150,7 @@ export default function MainScreen() {
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center justify-between gap-2">
                             <span className="text-white font-medium text-sm sm:text-base truncate">{player.name}</span>
-                            <span className="text-blue-400 font-bold text-sm sm:text-base flex-shrink-0">{player.balance.toLocaleString()} ₽</span>
+                            <span className="text-blue-400 font-bold text-sm sm:text-base flex-shrink-0">{player.usefulnessPoints} очков</span>
                           </div>
                           <div className="mt-1 bg-gray-700 rounded-full h-1.5 overflow-hidden">
                             <div
