@@ -12,6 +12,13 @@ export default function AdminPanel() {
     addEvent, events, logout, endSession, createSession
   } = useGameStore();
 
+  console.log('👑 AdminPanel render:', {
+    hasSession: !!session,
+    playersCount: players.length,
+    playerIds: players.map(p => p.id),
+    dealsCount: deals.length,
+  });
+
   const [activeTab, setActiveTab] = useState<'control' | 'bank' | 'market' | 'events'>('control');
   const [selectedPlayer, setSelectedPlayer] = useState('');
   const [bankAmount, setBankAmount] = useState(0);

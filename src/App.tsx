@@ -21,6 +21,16 @@ function App() {
   // Проверяем, что игрок действительно существует в массиве players
   const currentPlayer = players.find(p => p.id === currentPlayerId);
   const showNavigation = (currentPlayerId && currentPlayer) || isAdmin;
+  
+  console.log('🔀 App render:', {
+    currentPlayerId,
+    isAdmin,
+    isAuthenticated,
+    hasSession: !!session,
+    playersCount: players.length,
+    currentPlayerFound: !!currentPlayer,
+    showNavigation,
+  });
 
   return (
     <Router>

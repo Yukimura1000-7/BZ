@@ -881,6 +881,7 @@ export const useGameStore = create<GameState>()(
         events: state.events,
         currencyRates: state.currencyRates,
         isAuthenticated: state.isAuthenticated,
+        isAdmin: state.isAdmin,
         adminLogin: state.adminLogin,
         adminPassword: state.adminPassword,
         currentPlayerId: state.currentPlayerId,

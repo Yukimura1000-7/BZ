@@ -7,6 +7,12 @@ export default function MainScreen() {
   const { players, timerRunning, session, events } = useGameStore();
   const navigate = useNavigate();
 
+  console.log('📺 MainScreen render:', {
+    hasSession: !!session,
+    playersCount: players.length,
+    playerIds: players.map(p => p.id),
+  });
+
   if (!session) {
     return (
       <div className="min-h-[100dvh] flex items-center justify-center p-4 bg-gray-900">

@@ -9,6 +9,13 @@ export default function Navigation() {
 
   const timer = session?.timer ?? 0;
 
+  console.log('🧭 Navigation render:', {
+    currentPlayerId,
+    isAdmin,
+    isAuthenticated,
+    pathname: location.pathname,
+  });
+
   const formatTime = (seconds: number) => {
     const m = Math.floor(seconds / 60);
     const s = seconds % 60;
@@ -20,6 +27,9 @@ export default function Navigation() {
     navigate('/');
   };
 
+  const isPlayer = currentPlayerId && !isAuthenticated;
+  const isAuthAdmin = (isAdmin || isAuthenticated) && !currentPlayerId;
+
   return (
     <>
       {/* Timer bar */}
@@ -30,7 +40,7 @@ export default function Navigation() {
       {/* Bottom nav */}
       <nav className="fixed bottom-0 left-0 right-0 z-50 bg-gray-800/95 backdrop-blur border-t border-gray-700 pb-[env(safe-area-inset-bottom)]">
         <div className="flex items-center justify-around py-2">
-          {currentPlayerId && !isAuthenticated && (
+          {isPlayer && (
             <>
               <Link
                 to="/player"
@@ -48,7 +58,7 @@ export default function Navigation() {
               </Link>
             </>
           )}
-          {isAuthenticated && !currentPlayerId && (
+          {isAuthAdmin && (
             <>
               <Link
                 to="/admin"
