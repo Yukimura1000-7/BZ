@@ -3,7 +3,8 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { useGameStore } from '../store/gameStore';
 import { useToastStore } from '../store/toastStore';
 import { QRCodeSVG } from 'qrcode.react';
-import { UserPlus, ArrowRight, AlertCircle, Wifi, WifiOff, Info, RefreshCw } from 'lucide-react';
+import { UserPlus, ArrowRight, AlertCircle, Wifi, WifiOff, Info, RefreshCw, Stethoscope } from 'lucide-react';
+import { getSupabase, isSupabaseConfigured } from '../lib/supabase';
 
 export default function JoinSession() {
   const [name, setName] = useState('');
@@ -88,6 +89,102 @@ export default function JoinSession() {
       addToast('Ошибка подключения', 'error');
     }
     setLoading(false);
+  };
+
+  const [diagResult, setDiagResult] = useState<string | null>(null);
+  const [diagLoading, setDiagLoading] = useState(false);
+
+  const handleDiagnostics = async () => {
+    setDiagLoading(true);
+    setDiagResult(null);
+    
+    const results: string[] = [];
+    
+    // 1. Проверка конфигурации
+    results.push(`✅ Supabase настроен: ${isSupabaseConfigured}`);
+    
+    if (!isSupabaseConfigured) {
+      results.push('❌ Переменные VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY не заданы');
+      setDiagResult(results.join('\n'));
+      setDiagLoading(false);
+      return;
+    }
+    
+    // 2. Проверка клиента
+    const client = getSupabase();
+    results.push(client ? '✅ Supabase клиент создан' : '❌ Supabase клиент = null');
+    
+    if (!client) {
+      setDiagResult(results.join('\n'));
+      setDiagLoading(false);
+      return;
+    }
+    
+    // 3. Проверка таблицы sessions
+    try {
+      const { data, error, count } = await client
+        .from('sessions')
+        .select('*', { count: 'exact', head: false });
+      
+      if (error) {
+        results.push(`❌ Ошибка запроса к sessions: ${error.message}`);
+        if (error.message.includes('does not exist')) {
+          results.push('💡 Таблица sessions не существует! Создайте её в Supabase.');
+        }
+        if (error.message.includes('permission') || error.code === '42501') {
+          results.push('💡 Проблема с правами доступа (RLS). Отключите RLS или настройте политики.');
+        }
+      } else {
+        results.push(`✅ Таблица sessions доступна. Найдено сессий: ${data?.length || 0}`);
+        if (data && data.length > 0) {
+          results.push(`📋 Сессии в БД: ${data.map((s: any) => `${s.code} (${s.status})`).join(', ')}`);
+        }
+      }
+    } catch (e: any) {
+      results.push(`❌ Исключение при запросе: ${e.message}`);
+    }
+    
+    // 4. Проверка поиска по конкретному коду
+    if (sessionCode.trim()) {
+      try {
+        const { data, error } = await client
+          .from('sessions')
+          .select('*')
+          .eq('code', sessionCode.toUpperCase())
+          .maybeSingle();
+        
+        if (error) {
+          results.push(`❌ Поиск по коду ${sessionCode}: ${error.message}`);
+        } else if (data) {
+          results.push(`✅ Сессия ${sessionCode} найдена в БД! (id: ${data.id})`);
+        } else {
+          results.push(`❌ Сессия с кодом ${sessionCode} НЕ найдена в БД`);
+        }
+      } catch (e: any) {
+        results.push(`❌ Ошибка поиска: ${e.message}`);
+      }
+    }
+    
+    // 5. Проверка localStorage
+    try {
+      const storageKey = 'econom-strategy-storage';
+      const raw = localStorage.getItem(storageKey);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed?.state?.session) {
+          results.push(`📦 В localStorage есть сессия: ${parsed.state.session.code}`);
+        } else {
+          results.push('📦 В localStorage нет сессии');
+        }
+      } else {
+        results.push('📦 localStorage пуст (ключ econom-strategy-storage)');
+      }
+    } catch (e: any) {
+      results.push(`⚠️ Ошибка чтения localStorage: ${e.message}`);
+    }
+    
+    setDiagResult(results.join('\n'));
+    setDiagLoading(false);
   };
 
   const handleEnterGame = () => {
@@ -232,6 +329,27 @@ export default function JoinSession() {
           >
             ← На главную
           </button>
+
+          {/* Diagnostics */}
+          <div className="mt-4 pt-4 border-t border-gray-700">
+            <button
+              onClick={handleDiagnostics}
+              disabled={diagLoading}
+              className="w-full text-gray-500 hover:text-gray-300 disabled:text-gray-600 text-xs py-2 transition-colors flex items-center justify-center gap-1"
+            >
+              {diagLoading ? (
+                <><RefreshCw size={12} className="animate-spin" /> Проверка...</>
+              ) : (
+                <><Stethoscope size={12} /> Диагностика подключения</>
+              )}
+            </button>
+            
+            {diagResult && (
+              <div className="mt-2 bg-gray-900 rounded-lg p-3 text-xs font-mono text-gray-300 whitespace-pre-wrap border border-gray-700 max-h-48 overflow-y-auto">
+                {diagResult}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Help section */}

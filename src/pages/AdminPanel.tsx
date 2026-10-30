@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useGameStore } from '../store/gameStore';
 import { useToastStore } from '../store/toastStore';
-import { Play, Pause, Square, DollarSign, TrendingUp, Users, AlertTriangle, Banknote, Gavel, LogOut, Copy, Check, QrCode, Shield } from 'lucide-react';
+import { Play, Pause, Square, DollarSign, TrendingUp, Users, AlertTriangle, Banknote, Gavel, LogOut, Copy, Check, QrCode, Shield, RefreshCw } from 'lucide-react';
 
 export default function AdminPanel() {
   const {
@@ -27,11 +27,20 @@ export default function AdminPanel() {
 
   const [newSessionName, setNewSessionName] = useState('');
 
-  const handleCreateSession = () => {
+  const [creating, setCreating] = useState(false);
+
+  const handleCreateSession = async () => {
     const name = newSessionName.trim() || 'Игровая сессия';
-    const created = createSession(name);
-    setNewSessionName('');
-    addToast(`Сессия "${name}" создана! Код: ${created.code}`, 'success', 5000);
+    setCreating(true);
+    try {
+      const created = await createSession(name);
+      setNewSessionName('');
+      addToast(`Сессия "${name}" создана! Код: ${created.code}`, 'success', 5000);
+    } catch (e) {
+      console.error('Create session error:', e);
+      addToast('Ошибка создания сессии', 'error');
+    }
+    setCreating(false);
   };
 
   if (!session) {
@@ -55,10 +64,20 @@ export default function AdminPanel() {
             />
             <button
               onClick={handleCreateSession}
-              className="w-full bg-blue-500 hover:bg-blue-600 active:bg-blue-700 text-white font-bold py-3 px-6 rounded-xl transition-all flex items-center justify-center gap-2"
+              disabled={creating}
+              className="w-full bg-blue-500 hover:bg-blue-600 active:bg-blue-700 disabled:bg-gray-600 text-white font-bold py-3 px-6 rounded-xl transition-all flex items-center justify-center gap-2"
             >
-              <Shield size={18} />
-              Создать сессию
+              {creating ? (
+                <>
+                  <RefreshCw size={18} className="animate-spin" />
+                  Создание...
+                </>
+              ) : (
+                <>
+                  <Shield size={18} />
+                  Создать сессию
+                </>
+              )}
             </button>
           </div>
         </div>

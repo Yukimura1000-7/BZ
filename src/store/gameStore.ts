@@ -88,7 +88,7 @@ interface GameState {
   isSupabaseConnected: boolean;
   
   // Session actions
-  createSession: (name?: string) => Session;
+  createSession: (name?: string) => Promise<Session>;
   loadSessionByCode: (code: string) => Promise<Session | null>;
   joinSession: (sessionId: string, playerName: string) => Player | null;
   leaveSession: () => void;
@@ -254,7 +254,7 @@ export const useGameStore = create<GameState>()(
 
         try {
           // Обновляем сессию
-          await client.from('sessions').upsert({
+          const sessionPayload = {
             id: state.session.id,
             code: state.session.code,
             name: state.session.name,
@@ -262,11 +262,22 @@ export const useGameStore = create<GameState>()(
             phase: state.session.phase,
             timer: state.session.timer,
             phase_duration: state.session.phaseDuration,
-          });
+          };
+          console.log('📤 Pushing session to Supabase:', sessionPayload);
+          const { data: sessionResult, error: sessionError } = await client
+            .from('sessions')
+            .upsert(sessionPayload)
+            .select();
+          
+          if (sessionError) {
+            console.error('❌ Session upsert error:', sessionError);
+          } else {
+            console.log('✅ Session saved to Supabase:', sessionResult);
+          }
 
           // Обновляем игроков
           for (const p of state.players) {
-            await client.from('players').upsert({
+            const { error: playerError } = await client.from('players').upsert({
               id: p.id,
               session_id: state.session.id,
               name: p.name,
@@ -277,11 +288,12 @@ export const useGameStore = create<GameState>()(
               deals_count: p.dealsCount,
               salary: p.salary,
             });
+            if (playerError) console.error('❌ Player upsert error:', playerError);
           }
 
           // Обновляем сделки
           for (const d of state.deals) {
-            await client.from('deals').upsert({
+            const { error: dealError } = await client.from('deals').upsert({
               id: d.id,
               session_id: state.session.id,
               seller_id: d.sellerId,
@@ -293,34 +305,37 @@ export const useGameStore = create<GameState>()(
               seller_confirmed: d.sellerConfirmed,
               buyer_confirmed: d.buyerConfirmed,
             });
+            if (dealError) console.error('❌ Deal upsert error:', dealError);
           }
 
           // Обновляем события
           for (const e of state.events) {
-            await client.from('events').upsert({
+            const { error: eventError } = await client.from('events').upsert({
               id: e.id,
               session_id: state.session.id,
               title: e.title,
               description: e.description,
               type: e.type,
             });
+            if (eventError) console.error('❌ Event upsert error:', eventError);
           }
 
           // Обновляем курсы валют
           for (const r of state.currencyRates) {
-            await client.from('currency_rates').upsert({
+            const { error: rateError } = await client.from('currency_rates').upsert({
               session_id: state.session.id,
               currency: r.currency,
               rate: r.rate,
               change: r.change,
             }, { onConflict: 'session_id,currency' });
+            if (rateError) console.error('❌ Currency rate upsert error:', rateError);
           }
         } catch (e) {
           console.error('Push to Supabase error:', e);
         }
       },
 
-      createSession: (name?: string) => {
+      createSession: async (name?: string): Promise<Session> => {
         const session: Session = {
           id: generateId(),
           code: generateSessionCode(),
@@ -333,8 +348,27 @@ export const useGameStore = create<GameState>()(
         };
         set({ session, isAdmin: true, isAuthenticated: true, players: [], deals: [], events: [] });
         
-        // Push в Supabase
-        get().pushToSupabase();
+        // Push в Supabase и ждём результат
+        console.log('📤 Creating session, pushing to Supabase...');
+        await get().pushToSupabase();
+        
+        // Проверяем, что сессия действительно сохранилась
+        if (isSupabaseConfigured) {
+          const client = getSupabase();
+          if (client) {
+            const { data, error } = await client
+              .from('sessions')
+              .select('id, code')
+              .eq('id', session.id)
+              .single();
+            
+            if (error || !data) {
+              console.error('❌ Session was NOT saved to Supabase!', error);
+            } else {
+              console.log('✅ Session confirmed in Supabase:', data);
+            }
+          }
+        }
         
         return session;
       },
@@ -385,22 +419,22 @@ export const useGameStore = create<GameState>()(
 
         try {
           // Ищем сессию по коду в Supabase
-          console.log('🔍 Querying sessions table...');
+          console.log('🔍 Querying sessions table for code:', upperCode);
           const { data: sessionData, error } = await client
             .from('sessions')
             .select('*')
             .eq('code', upperCode)
-            .single();
+            .maybeSingle();
 
           console.log('🔍 Query result:', { sessionData, error });
 
           if (error) {
-            console.error('❌ Session query error:', error);
+            console.error('❌ Session query error:', error.message, error.code);
             return null;
           }
           
           if (!sessionData) {
-            console.error('❌ Session not found in database');
+            console.warn('⚠️ Session not found in database for code:', upperCode);
             return null;
           }
 
