@@ -17,6 +17,7 @@ import {
   Shield,
   Sparkles,
   Square,
+  Trophy,
   Users,
 } from 'lucide-react';
 import { useGameStore } from '../store/gameStore';
@@ -521,6 +522,20 @@ function HostDashboard() {
             </Link>
           </div>
         )}
+
+        <Link
+          to="/leaderboard"
+          className="mt-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-2xl p-4 flex items-center gap-3 transition-colors"
+        >
+          <div className="bg-amber-500/15 border border-amber-500/30 rounded-xl p-2.5">
+            <Trophy size={22} className="text-amber-400" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-white font-bold text-sm">Лидерборд</p>
+            <p className="text-gray-400 text-xs">Покупатели и продавцы — отдельные рейтинги</p>
+          </div>
+          <ArrowRight size={18} className="text-gray-400 flex-shrink-0" />
+        </Link>
 
         {/* Participants */}
         <section className="mt-5">

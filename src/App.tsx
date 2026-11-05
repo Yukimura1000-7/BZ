@@ -5,6 +5,7 @@ import PlayerDashboard from './pages/PlayerDashboard';
 import HostPanel from './pages/HostPanel';
 import MoneyPage from './pages/MoneyPage';
 import PointsPage from './pages/PointsPage';
+import LeaderboardPage from './pages/LeaderboardPage';
 import ToastContainer from './components/ToastContainer';
 import SupabaseRealtime from './components/SupabaseRealtime';
 import SessionInitializer from './components/SessionInitializer';
@@ -30,6 +31,8 @@ function App() {
           <Route path="/host" element={<HostPanel />} />
           <Route path="/money" element={<MoneyPage />} />
           <Route path="/points" element={<PointsPage />} />
+          <Route path="/leaderboard" element={<LeaderboardPage />} />
+          <Route path="/leaderboard/:code" element={<LeaderboardPage />} />
           <Route path="/admin" element={<Navigate to="/host" replace />} />
           <Route path="/admin-login" element={<Navigate to="/host" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />

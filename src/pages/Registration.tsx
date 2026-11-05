@@ -7,6 +7,7 @@ import {
   RotateCcw,
   Shield,
   Sparkles,
+  Trophy,
   UserPlus,
   Wifi,
   WifiOff,
@@ -125,6 +126,15 @@ export default function Registration() {
             </span>
           </Link>
         </div>
+
+        <Link
+          to="/leaderboard"
+          className="w-full bg-gray-800/70 hover:bg-gray-800 border border-gray-700 rounded-xl px-4 py-3 flex items-center justify-center gap-2 mb-4 transition-colors"
+        >
+          <Trophy size={18} className="text-amber-400" />
+          <span className="text-sm text-gray-200">Лидерборд сессии</span>
+          <ArrowRight size={16} className="text-gray-500" />
+        </Link>
 
         <div
           className={`text-center text-xs px-3 py-2 rounded-lg flex items-center justify-center gap-1.5 ${

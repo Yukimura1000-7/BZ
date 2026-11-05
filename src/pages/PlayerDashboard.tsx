@@ -2,12 +2,14 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   AlertTriangle,
+  ArrowRight,
   Check,
   Copy,
   Loader2,
   LogOut,
   RefreshCw,
   Sparkles,
+  Trophy,
   Wallet,
 } from 'lucide-react';
 import { useGameStore } from '../store/gameStore';
@@ -267,6 +269,20 @@ export default function PlayerDashboard() {
                 : 'Сотрудник начислит деньги по вашему ID.'}
             </p>
           </div>
+
+          <Link
+            to="/leaderboard"
+            className="bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-2xl p-4 flex items-center gap-3 transition-colors"
+          >
+            <div className="bg-amber-500/15 border border-amber-500/30 rounded-xl p-2.5">
+              <Trophy size={20} className="text-amber-400" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-white font-medium text-sm">Лидерборд</p>
+              <p className="text-gray-400 text-xs">Покупатели и продавцы</p>
+            </div>
+            <ArrowRight size={18} className="text-gray-400 flex-shrink-0" />
+          </Link>
 
           <div className="bg-gray-800 rounded-2xl border border-gray-700 p-4">
             <p className="text-gray-300 text-sm font-medium mb-1.5">
