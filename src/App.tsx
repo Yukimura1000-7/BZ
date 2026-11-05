@@ -1,43 +1,21 @@
 import { HashRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
-import { useGameStore } from './store/gameStore';
 import Registration from './pages/Registration';
-import PlayerDashboard from './pages/PlayerDashboard';
-import AdminPanel from './pages/AdminPanel';
-import MainScreen from './pages/MainScreen';
-import DealPage from './pages/DealPage';
 import JoinSession from './pages/JoinSession';
-import AdminLogin from './pages/AdminLogin';
-import Navigation from './components/Navigation';
-import TimerEffect from './components/TimerEffect';
+import PlayerDashboard from './pages/PlayerDashboard';
+import HostPanel from './pages/HostPanel';
+import MoneyPage from './pages/MoneyPage';
+import PointsPage from './pages/PointsPage';
 import ToastContainer from './components/ToastContainer';
-import CurrencyUpdater from './components/CurrencyUpdater';
-import StorageSync from './components/StorageSync';
 import SupabaseRealtime from './components/SupabaseRealtime';
 import SessionInitializer from './components/SessionInitializer';
+import { useGameStore } from './store/gameStore';
 
 function App() {
-  const { currentPlayerId, isAdmin, isAuthenticated, session, players } = useGameStore();
-  
-  // Проверяем, что игрок действительно существует в массиве players
-  const currentPlayer = players.find(p => p.id === currentPlayerId);
-  const showNavigation = (currentPlayerId && currentPlayer) || isAdmin;
-  
-  console.log('🔀 App render:', {
-    currentPlayerId,
-    isAdmin,
-    isAuthenticated,
-    hasSession: !!session,
-    playersCount: players.length,
-    currentPlayerFound: !!currentPlayer,
-    showNavigation,
-  });
+  const currentPlayerId = useGameStore((state) => state.currentPlayerId);
 
   return (
     <Router>
       <SessionInitializer />
-      <TimerEffect />
-      <CurrencyUpdater />
-      <StorageSync />
       <SupabaseRealtime />
       <ToastContainer />
       <div className="min-h-screen min-h-[100dvh] bg-gray-900 text-white">
@@ -45,21 +23,17 @@ function App() {
           <Route path="/" element={<Registration />} />
           <Route path="/join" element={<JoinSession />} />
           <Route path="/join/:code" element={<JoinSession />} />
-          <Route path="/admin-login" element={<AdminLogin />} />
-          <Route path="/player" element={
-            currentPlayerId && !isAuthenticated ? <PlayerDashboard /> : <Navigate to="/" />
-          } />
-          <Route path="/deal" element={
-            currentPlayerId && !isAuthenticated ? <DealPage /> : <Navigate to="/" />
-          } />
-          <Route path="/admin" element={
-            isAuthenticated && !currentPlayerId ? <AdminPanel /> : <Navigate to="/" />
-          } />
-          <Route path="/screen" element={
-            isAuthenticated && !currentPlayerId ? <MainScreen /> : <Navigate to="/" />
-          } />
+          <Route
+            path="/player"
+            element={currentPlayerId ? <PlayerDashboard /> : <Navigate to="/join" replace />}
+          />
+          <Route path="/host" element={<HostPanel />} />
+          <Route path="/money" element={<MoneyPage />} />
+          <Route path="/points" element={<PointsPage />} />
+          <Route path="/admin" element={<Navigate to="/host" replace />} />
+          <Route path="/admin-login" element={<Navigate to="/host" replace />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
-        {showNavigation && <Navigation />}
       </div>
     </Router>
   );

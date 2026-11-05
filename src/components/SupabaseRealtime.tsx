@@ -2,56 +2,63 @@ import { useEffect } from 'react';
 import { useGameStore } from '../store/gameStore';
 import { getSupabase, isSupabaseConfigured } from '../lib/supabase';
 
+/**
+ * Держит список участников и статус сессии в актуальном состоянии
+ * на всех устройствах: realtime-подписка + периодическая синхронизация.
+ */
 export default function SupabaseRealtime() {
-  const { session, syncFromSupabase } = useGameStore();
+  const sessionId = useGameStore((state) => state.session?.id ?? null);
+  const syncFromSupabase = useGameStore((state) => state.syncFromSupabase);
 
-  // Подписываемся на изменения в сессии
   useEffect(() => {
-    if (!session || !isSupabaseConfigured) return;
+    if (!sessionId || !isSupabaseConfigured) return;
+
     const client = getSupabase();
     if (!client) return;
 
-    console.log('📡 SupabaseRealtime: subscribing to changes for session', session.id);
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleSync = () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        void syncFromSupabase();
+      }, 250);
+    };
 
-    const channels = [
-      'sessions',
-      'players',
-      'deals',
-      'events',
-      'currency_rates',
-    ].map(table => {
-      const filterCol = table === 'sessions' ? 'id' : 'session_id';
-      return client
-        .channel(`${table}-${session.id}`)
-        .on('postgres_changes', {
+    const channel = client
+      .channel(`session-${sessionId}`)
+      .on(
+        'postgres_changes',
+        {
           event: '*',
           schema: 'public',
-          table,
-          filter: `${filterCol}=eq.${session.id}`,
-        }, (payload) => {
-          console.log('🔔 Realtime event:', table, payload.eventType);
-          syncFromSupabase();
-        })
-        .subscribe();
-    });
+          table: 'players',
+          filter: `session_id=eq.${sessionId}`,
+        },
+        scheduleSync
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'sessions',
+          filter: `id=eq.${sessionId}`,
+        },
+        scheduleSync
+      )
+      .subscribe();
+
+    // Резервный опрос — если realtime выключен в проекте Supabase.
+    const poll = setInterval(() => {
+      void syncFromSupabase();
+    }, 4000);
 
     return () => {
-      channels.forEach(ch => client.removeChannel(ch));
+      if (debounceTimer) clearTimeout(debounceTimer);
+      clearInterval(poll);
+      void client.removeChannel(channel);
     };
-  }, [session?.id, syncFromSupabase]);
-
-  // Периодическая синхронизация (fallback)
-  useEffect(() => {
-    if (!session || !isSupabaseConfigured) return;
-
-    console.log('⏰ SupabaseRealtime: starting periodic sync (every 5s)');
-
-    const interval = setInterval(() => {
-      syncFromSupabase();
-    }, 5000);
-
-    return () => clearInterval(interval);
-  }, [session?.id, syncFromSupabase]);
+  }, [sessionId, syncFromSupabase]);
 
   return null;
 }

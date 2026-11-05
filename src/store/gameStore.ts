@@ -4,6 +4,8 @@ import { v4 as uuidv4 } from 'uuid';
 import { getSupabase, isSupabaseConfigured } from '../lib/supabase';
 
 export type PlayerRole = 'buyer' | 'seller';
+export type SessionStatus = 'waiting' | 'active' | 'paused' | 'ended';
+export type CreditKind = 'money' | 'points';
 
 export interface Player {
   id: string;
@@ -11,135 +13,179 @@ export interface Player {
   sessionId: string;
   role: PlayerRole;
   balance: number;
-  usefulnessPoints: number; // Очки полезности для покупателей
-  goods: Record<string, number>;
-  qrCode: string;
-  dealsCount: number;
-  salary: number;
-  registered: boolean;
+  usefulnessPoints: number;
+  createdAt: number;
 }
-
-export interface Deal {
-  id: string;
-  sellerId: string;
-  buyerId: string;
-  goods: string;
-  quantity: number;
-  amount: number;
-  timestamp: number;
-  status: 'pending' | 'confirmed' | 'rejected';
-  sellerConfirmed: boolean;
-  buyerConfirmed: boolean;
-}
-
-export interface GameEvent {
-  id: string;
-  title: string;
-  description: string;
-  timestamp: number;
-  type: 'currency' | 'market' | 'random';
-}
-
-export interface CurrencyRate {
-  currency: string;
-  rate: number;
-  change: number;
-}
-
-export type SessionStatus = 'waiting' | 'active' | 'paused' | 'ended';
 
 export interface Session {
   id: string;
   code: string;
   name: string;
   status: SessionStatus;
-  phase: number;
-  timer: number;
-  phaseDuration: number;
+  /** PIN для входа на служебные страницы (деньги / очки) */
+  staffPin: string;
   createdAt: number;
 }
 
+export interface CreditResult {
+  ok: boolean;
+  error?: string;
+  player?: Player;
+  /** Новое значение баланса или очков */
+  value?: number;
+}
+
 interface GameState {
-  // Session
   session: Session | null;
-  
-  // Players
   players: Player[];
   currentPlayerId: string | null;
   savedPlayerData: Player | null;
-  
-  // Deals
-  deals: Deal[];
-  pendingDeal: Deal | null;
-  
-  // Game
-  timerRunning: boolean;
-  
-  // Events
-  events: GameEvent[];
-  currencyRates: CurrencyRate[];
-  
-  // Admin
-  isAdmin: boolean;
-  isAuthenticated: boolean;
-  adminLogin: string;
-  adminPassword: string;
-  
-  // Supabase
-  isSupabaseConnected: boolean;
-  
-  // Session actions
+
+  /** Сессия, в которую персонал вошёл по PIN. Хранится отдельно от игрока. */
+  staffSessionId: string | null;
+
+  syncError: string | null;
+  lastSyncAt: number | null;
+  /**
+   * Есть ли в таблице players колонка usefulness_points.
+   * null — ещё не проверяли. Если колонки нет, очки храним в goods.__usefulness_points.
+   */
+  pointsColumnAvailable: boolean | null;
+
+  // Сессия
   createSession: (name?: string) => Promise<Session>;
   loadSessionByCode: (code: string) => Promise<Session | null>;
+  authenticateStaff: (code: string, pin: string) => Promise<{ ok: boolean; error?: string }>;
+  logoutStaff: () => void;
+  endSession: () => Promise<boolean>;
+  resetSession: () => void;
+
+  // Игрок
   joinSession: (sessionId: string, playerName: string) => Promise<Player | null>;
   leaveSession: () => void;
-  endSession: () => void;
   restoreSession: () => boolean;
-  
-  // Player actions
-  setCurrentPlayer: (id: string) => void;
-  
-  // Deal actions
-  createDeal: (sellerId: string, buyerId: string, goods: string, quantity: number, amount: number) => void;
-  confirmDeal: (dealId: string, playerId: string) => void;
-  rejectDeal: (dealId: string) => void;
-  
-  // Phase actions
-  startPhase: (duration: number) => void;
-  pausePhase: () => void;
-  resumePhase: () => void;
-  endPhase: () => void;
-  tickTimer: () => void;
-  
-  // Event actions
-  addEvent: (event: Omit<GameEvent, 'id' | 'timestamp'>) => void;
-  updateCurrencyRate: (currency: string, rate: number) => void;
-  
-  // Admin actions
-  setAdmin: (isAdmin: boolean) => void;
-  login: (login: string, password: string) => boolean;
-  logout: () => void;
-  setAdminCredentials: (login: string, password: string) => void;
-  
-  // Bank
-  paySalary: () => void;
-  deposit: (playerId: string, amount: number) => void;
-  withdraw: (playerId: string, amount: number) => void;
-  
-  // Sync
+  setCurrentPlayer: (id: string | null) => void;
+
+  // Начисления
+  creditPlayer: (playerId: string, amount: number, kind: CreditKind) => Promise<CreditResult>;
+
+  // Синхронизация
   syncFromSupabase: () => Promise<void>;
-  pushToSupabase: () => Promise<void>;
 }
 
-const generateId = () => uuidv4();
-const generateSessionCode = () => Math.random().toString(36).substr(2, 6).toUpperCase();
+const STORAGE_KEY = 'econom-strategy-storage';
+const DEFAULT_STAFF_PIN = 'admin';
+const MAX_CREDIT = 1_000_000;
 
-const initialCurrencyRates: CurrencyRate[] = [
-  { currency: 'USD', rate: 90.5, change: 0 },
-  { currency: 'EUR', rate: 98.2, change: 0 },
-  { currency: 'BTC', rate: 65000, change: 0 },
-  { currency: 'Золото', rate: 5800, change: 0 },
-];
+const generateId = () => uuidv4();
+const generateSessionCode = () =>
+  Math.random().toString(36).slice(2, 8).padEnd(6, '0').toUpperCase();
+
+const STATUSES: SessionStatus[] = ['waiting', 'active', 'paused', 'ended'];
+
+const normalizeStatus = (value: unknown): SessionStatus =>
+  STATUSES.includes(value as SessionStatus) ? (value as SessionStatus) : 'active';
+
+const normalizeSession = (raw: any): Session | null => {
+  if (!raw || typeof raw !== 'object' || !raw.id || !raw.code) return null;
+  return {
+    id: String(raw.id),
+    code: String(raw.code).toUpperCase(),
+    name: String(raw.name || 'Игровая сессия'),
+    status: normalizeStatus(raw.status),
+    staffPin: raw.staffPin || raw.admin_password || DEFAULT_STAFF_PIN,
+    createdAt: Number(raw.createdAt) || Date.now(),
+  };
+};
+
+const normalizePlayer = (raw: any): Player | null => {
+  if (!raw || typeof raw !== 'object' || !raw.id || !raw.sessionId) return null;
+  return {
+    id: String(raw.id),
+    name: String(raw.name || 'Участник'),
+    sessionId: String(raw.sessionId),
+    role: raw.role === 'seller' ? 'seller' : 'buyer',
+    balance: Number(raw.balance) || 0,
+    usefulnessPoints: Number(raw.usefulnessPoints ?? raw.usefulness_points) || 0,
+    createdAt: Number(raw.createdAt) || Date.now(),
+  };
+};
+
+const mapSessionRow = (row: any): Session => ({
+  id: row.id,
+  code: String(row.code).toUpperCase(),
+  name: row.name || 'Игровая сессия',
+  status: normalizeStatus(row.status),
+  staffPin: row.admin_password || DEFAULT_STAFF_PIN,
+  createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
+});
+
+const mapPlayerRow = (row: any): Player => {
+  const goods =
+    row.goods && typeof row.goods === 'object' ? (row.goods as Record<string, unknown>) : {};
+  const goodsPoints = Number(goods.__usefulness_points) || 0;
+  const columnPoints = Number(row.usefulness_points) || 0;
+
+  return {
+    id: row.id,
+    name: row.name || 'Участник',
+    sessionId: row.session_id,
+    role: row.role === 'seller' ? 'seller' : 'buyer',
+    balance: Number(row.balance) || 0,
+    // Если колонки usefulness_points ещё нет, очки лежат в goods.
+    usefulnessPoints: Math.max(columnPoints, goodsPoints),
+    createdAt: row.created_at ? new Date(row.created_at).getTime() : Date.now(),
+  };
+};
+
+const chooseRole = (players: Player[]): PlayerRole => {
+  const buyers = players.filter((p) => p.role === 'buyer').length;
+  const total = players.length;
+  // 60% покупателей / 40% продавцов
+  return total === 0 || buyers / (total + 1) < 0.6 ? 'buyer' : 'seller';
+};
+
+const readLocalState = (): any => {
+  try {
+    if (typeof localStorage === 'undefined') return null;
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw)?.state ?? null;
+  } catch {
+    return null;
+  }
+};
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Проверяет, есть ли в таблице players колонка usefulness_points.
+ * На старых установках её может не быть — тогда очки храним в JSONB goods,
+ * чтобы приложение работало без ручной миграции. После добавления колонки
+ * приложение автоматически переключится на неё.
+ */
+const detectPointsColumn = async (
+  client: any,
+  set: (partial: any) => void,
+  get: () => GameState
+): Promise<boolean | null> => {
+  const cached = get().pointsColumnAvailable;
+  if (cached !== null) return cached;
+
+  const { error } = await client.from('players').select('usefulness_points').limit(1);
+
+  if (!error) {
+    set({ pointsColumnAvailable: true });
+    return true;
+  }
+  if (error.code === '42703') {
+    set({ pointsColumnAvailable: false });
+    return false;
+  }
+
+  console.warn('Could not detect players.usefulness_points:', error);
+  return null;
+};
 
 export const useGameStore = create<GameState>()(
   persist(
@@ -148,745 +194,563 @@ export const useGameStore = create<GameState>()(
       players: [],
       currentPlayerId: null,
       savedPlayerData: null,
-      deals: [],
-      pendingDeal: null,
-      timerRunning: false,
-      events: [],
-      currencyRates: initialCurrencyRates,
-      isAdmin: false,
-      isAuthenticated: false,
-      adminLogin: 'admin',
-      adminPassword: 'admin',
-      isSupabaseConnected: isSupabaseConfigured,
+      staffSessionId: null,
+      syncError: null,
+      lastSyncAt: null,
+      pointsColumnAvailable: null,
 
-      // Синхронизация ИЗ Supabase (загрузка данных)
-      syncFromSupabase: async () => {
-        if (!isSupabaseConfigured) return;
-        const client = getSupabase();
-        if (!client) return;
-        const state = get();
-        if (!state.session) return;
-
-        console.log('🔄 syncFromSupabase: starting sync for session', state.session.id);
-        console.log('🔄 Local state: players=', state.players.length, 'currentPlayerId=', state.currentPlayerId);
-
-        try {
-          const [sessionRes, playersRes, dealsRes, eventsRes, ratesRes] = await Promise.all([
-            client.from('sessions').select('*').eq('id', state.session.id).single(),
-            client.from('players').select('*').eq('session_id', state.session.id),
-            client.from('deals').select('*').eq('session_id', state.session.id),
-            client.from('events').select('*').eq('session_id', state.session.id).order('created_at', { ascending: false }),
-            client.from('currency_rates').select('*').eq('session_id', state.session.id),
-          ]);
-
-          console.log('📥 Supabase response: players=', playersRes.data?.length, 'deals=', dealsRes.data?.length);
-
-          const updates: any = {};
-
-          if (sessionRes.data) {
-            updates.session = {
-              id: sessionRes.data.id,
-              code: sessionRes.data.code,
-              name: sessionRes.data.name,
-              status: sessionRes.data.status,
-              phase: sessionRes.data.phase,
-              timer: sessionRes.data.timer,
-              phaseDuration: sessionRes.data.phase_duration,
-              createdAt: new Date(sessionRes.data.created_at).getTime(),
-            };
-          }
-
-          // Игроки: не перезаписываем если из БД пусто, а локально есть данные
-          if (playersRes.data && playersRes.data.length > 0) {
-            updates.players = playersRes.data.map((db: any) => {
-              // Берём дополнительные данные из локального состояния если есть
-              const localPlayer = state.players.find(p => p.id === db.id);
-              return {
-                id: db.id,
-                name: db.name,
-                sessionId: db.session_id,
-                role: db.role,
-                balance: db.balance,
-                usefulnessPoints: db.usefulness_points ?? localPlayer?.usefulnessPoints ?? 0,
-                goods: db.goods,
-                qrCode: db.id,
-                dealsCount: db.deals_count ?? localPlayer?.dealsCount ?? 0,
-                salary: db.salary ?? localPlayer?.salary ?? 200,
-                registered: true,
-              };
-            });
-            
-            // Защита: если currentPlayerId есть локально, но его нет в данных из Supabase — добавляем из локальных
-            if (state.currentPlayerId) {
-              const currentPlayerInRemote = updates.players.find((p: any) => p.id === state.currentPlayerId);
-              if (!currentPlayerInRemote) {
-                const localCurrentPlayer = state.players.find(p => p.id === state.currentPlayerId);
-                if (localCurrentPlayer) {
-                  console.warn('⚠️ currentPlayerId not in Supabase data — adding from local:', localCurrentPlayer.name);
-                  updates.players.push(localCurrentPlayer);
-                }
-              }
-            }
-          } else if (playersRes.data && playersRes.data.length === 0 && state.players.length > 0) {
-            // В БД пусто, но локально есть игроки — не перезаписываем!
-            console.warn('⚠️ Supabase returned 0 players, but local has', state.players.length, '— keeping local data');
-          } else if (playersRes.data) {
-            updates.players = [];
-          }
-
-          // Сделки: аналогичная защита
-          if (dealsRes.data && dealsRes.data.length > 0) {
-            updates.deals = dealsRes.data.map((db: any) => ({
-              id: db.id,
-              sellerId: db.seller_id,
-              buyerId: db.buyer_id,
-              goods: db.goods,
-              quantity: db.quantity,
-              amount: db.amount,
-              timestamp: new Date(db.created_at).getTime(),
-              status: db.status,
-              sellerConfirmed: db.seller_confirmed,
-              buyerConfirmed: db.buyer_confirmed,
-            }));
-          } else if (dealsRes.data && dealsRes.data.length === 0 && state.deals.length > 0) {
-            console.warn('⚠️ Supabase returned 0 deals, but local has', state.deals.length, '— keeping local data');
-          } else if (dealsRes.data) {
-            updates.deals = [];
-          }
-
-          // События
-          if (eventsRes.data && eventsRes.data.length > 0) {
-            updates.events = eventsRes.data.map((db: any) => ({
-              id: db.id,
-              title: db.title,
-              description: db.description,
-              timestamp: new Date(db.created_at).getTime(),
-              type: db.type,
-            }));
-          } else if (eventsRes.data && eventsRes.data.length === 0 && state.events.length > 0) {
-            console.warn('⚠️ Supabase returned 0 events, but local has', state.events.length, '— keeping local data');
-          } else if (eventsRes.data) {
-            updates.events = [];
-          }
-
-          if (ratesRes.data && ratesRes.data.length > 0) {
-            updates.currencyRates = ratesRes.data.map((r: any) => ({
-              currency: r.currency,
-              rate: Number(r.rate),
-              change: Number(r.change),
-            }));
-          }
-
-          console.log('📝 Applying updates to store:', {
-            keys: Object.keys(updates),
-            playersCount: updates.players?.length,
-            currentPlayerId: state.currentPlayerId,
-            playerIds: updates.players?.map((p: any) => p.id),
-          });
-          
-          set(updates);
-        } catch (e) {
-          console.error('Sync from Supabase error:', e);
-        }
-      },
-
-      // Синхронизация В Supabase (отправка данных)
-      pushToSupabase: async () => {
-        if (!isSupabaseConfigured) return;
-        const client = getSupabase();
-        if (!client) return;
-        const state = get();
-        if (!state.session) return;
-
-        try {
-          // Обновляем сессию
-          const sessionPayload = {
-            id: state.session.id,
-            code: state.session.code,
-            name: state.session.name,
-            status: state.session.status,
-            phase: state.session.phase,
-            timer: state.session.timer,
-            phase_duration: state.session.phaseDuration,
-          };
-          console.log('📤 Pushing session to Supabase:', sessionPayload);
-          const { data: sessionResult, error: sessionError } = await client
-            .from('sessions')
-            .upsert(sessionPayload)
-            .select();
-          
-          if (sessionError) {
-            console.error('❌ Session upsert error:', sessionError);
-          } else {
-            console.log('✅ Session saved to Supabase:', sessionResult);
-          }
-
-          // Обновляем игроков
-          for (const p of state.players) {
-            const { error: playerError } = await client.from('players').upsert({
-              id: p.id,
-              session_id: state.session.id,
-              name: p.name,
-              role: p.role,
-              balance: p.balance,
-              usefulness_points: p.usefulnessPoints,
-              goods: p.goods,
-              deals_count: p.dealsCount,
-              salary: p.salary,
-            });
-            if (playerError) console.error('❌ Player upsert error:', playerError);
-          }
-
-          // Обновляем сделки
-          for (const d of state.deals) {
-            const { error: dealError } = await client.from('deals').upsert({
-              id: d.id,
-              session_id: state.session.id,
-              seller_id: d.sellerId,
-              buyer_id: d.buyerId,
-              goods: d.goods,
-              quantity: d.quantity,
-              amount: d.amount,
-              status: d.status,
-              seller_confirmed: d.sellerConfirmed,
-              buyer_confirmed: d.buyerConfirmed,
-            });
-            if (dealError) console.error('❌ Deal upsert error:', dealError);
-          }
-
-          // Обновляем события
-          for (const e of state.events) {
-            const { error: eventError } = await client.from('events').upsert({
-              id: e.id,
-              session_id: state.session.id,
-              title: e.title,
-              description: e.description,
-              type: e.type,
-            });
-            if (eventError) console.error('❌ Event upsert error:', eventError);
-          }
-
-          // Обновляем курсы валют
-          for (const r of state.currencyRates) {
-            const { error: rateError } = await client.from('currency_rates').upsert({
-              session_id: state.session.id,
-              currency: r.currency,
-              rate: r.rate,
-              change: r.change,
-            }, { onConflict: 'session_id,currency' });
-            if (rateError) console.error('❌ Currency rate upsert error:', rateError);
-          }
-        } catch (e) {
-          console.error('Push to Supabase error:', e);
-        }
-      },
-
-      createSession: async (name?: string): Promise<Session> => {
+      createSession: async (name?: string) => {
+        let staffPin = String(Math.floor(1000 + Math.random() * 9000));
         const session: Session = {
           id: generateId(),
           code: generateSessionCode(),
-          name: name || 'Игровая сессия',
-          status: 'waiting',
-          phase: 0,
-          timer: 600,
-          phaseDuration: 600,
+          name: name?.trim() || 'Игровая сессия',
+          status: 'active',
+          staffPin,
           createdAt: Date.now(),
         };
-        set({ session, isAdmin: true, isAuthenticated: true, players: [], deals: [], events: [] });
-        
-        // Push в Supabase и ждём результат
-        console.log('📤 Creating session, pushing to Supabase...');
-        await get().pushToSupabase();
-        
-        // Проверяем, что сессия действительно сохранилась
+
+        let remoteOk = !isSupabaseConfigured;
+        let syncError: string | null = null;
+
         if (isSupabaseConfigured) {
           const client = getSupabase();
-          if (client) {
-            const { data, error } = await client
-              .from('sessions')
-              .select('id, code')
-              .eq('id', session.id)
-              .single();
-            
-            if (error || !data) {
-              console.error('❌ Session was NOT saved to Supabase!', error);
-            } else {
-              console.log('✅ Session confirmed in Supabase:', data);
+          if (!client) {
+            syncError = 'Нет подключения к серверу — сессия создана только на этом устройстве.';
+          } else {
+            for (let attempt = 0; attempt < 3 && !remoteOk; attempt += 1) {
+              const { error } = await client.from('sessions').insert({
+                id: session.id,
+                code: session.code,
+                name: session.name,
+                status: session.status,
+                admin_login: 'staff',
+                admin_password: staffPin,
+              });
+
+              if (!error) {
+                remoteOk = true;
+                break;
+              }
+
+              // Коллизия кода — генерируем новый и пробуем снова.
+              if (error.code === '23505') {
+                session.code = generateSessionCode();
+                continue;
+              }
+
+              // На старых установках может не быть admin_login/admin_password.
+              if (error.code === '42703') {
+                staffPin = DEFAULT_STAFF_PIN;
+                session.staffPin = staffPin;
+                const { error: retryError } = await client.from('sessions').insert({
+                  id: session.id,
+                  code: session.code,
+                  name: session.name,
+                  status: session.status,
+                });
+                if (!retryError) {
+                  remoteOk = true;
+                } else {
+                  console.error('Session insert retry error:', retryError);
+                  syncError = 'Не удалось сохранить сессию на сервере.';
+                }
+                break;
+              }
+
+              console.error('Session insert error:', error);
+              syncError = 'Не удалось сохранить сессию на сервере.';
+              break;
             }
           }
         }
-        
+
+        set({
+          session,
+          players: [],
+          currentPlayerId: null,
+          savedPlayerData: null,
+          staffSessionId: session.id,
+          syncError,
+          lastSyncAt: Date.now(),
+        });
+
         return session;
       },
 
       loadSessionByCode: async (code: string) => {
-        console.log('🔍 Loading session by code:', code);
-        console.log('🔍 isSupabaseConfigured:', isSupabaseConfigured);
-        
-        const upperCode = code.toUpperCase();
+        const upperCode = code.trim().toUpperCase();
+        if (!upperCode) return null;
 
-        // 1. Сначала ищем в localStorage (для случая, когда сессия создана на этом же устройстве)
-        try {
-          const storageKey = 'econom-strategy-storage';
-          const rawStorage = localStorage.getItem(storageKey);
-          if (rawStorage) {
-            const parsed = JSON.parse(rawStorage);
-            const state = parsed?.state;
-            if (state?.session && state.session.code === upperCode) {
-              console.log('✅ Session found in localStorage:', state.session.code);
-              const session = state.session as Session;
+        let remoteError: string | null = null;
+
+        if (isSupabaseConfigured) {
+          const client = getSupabase();
+          if (client) {
+            await detectPointsColumn(client, set, get);
+
+            const { data, error } = await client
+              .from('sessions')
+              .select('*')
+              .eq('code', upperCode)
+              .maybeSingle();
+
+            if (error) {
+              console.error('Session query error:', error);
+              remoteError = 'Не удалось связаться с сервером.';
+            }
+
+            if (data) {
+              const session = mapSessionRow(data);
+              const { data: playersData, error: playersError } = await client
+                .from('players')
+                .select('*')
+                .eq('session_id', session.id);
+
+              if (playersError) console.error('Players query error:', playersError);
+
               set({
                 session,
-                players: state.players || [],
-                deals: state.deals || [],
-                events: state.events || [],
-                currencyRates: state.currencyRates || initialCurrencyRates,
+                players: playersData ? playersData.map(mapPlayerRow) : [],
+                syncError: playersError ? 'Не удалось загрузить участников.' : null,
+                lastSyncAt: Date.now(),
               });
               return session;
             }
           }
-        } catch (e) {
-          console.warn('⚠️ Error reading localStorage:', e);
         }
 
-        // 2. Если Supabase не настроен — сессию не найти на другом устройстве
-        if (!isSupabaseConfigured) {
-          console.error('❌ Supabase not configured — cannot search remote sessions');
-          return null;
-        }
-        
-        const client = getSupabase();
-        console.log('🔍 Supabase client:', client);
-        
-        if (!client) {
-          console.error('❌ Supabase client is null');
-          return null;
+        // Локальный режим / сессия, созданная на этом устройстве без сети.
+        const local = readLocalState();
+        const localSession = normalizeSession(local?.session);
+        if (localSession && localSession.code === upperCode) {
+          const localPlayers = Array.isArray(local?.players)
+            ? (local.players.map(normalizePlayer).filter(Boolean) as Player[])
+            : [];
+
+          set({
+            session: localSession,
+            players: localPlayers,
+            syncError: remoteError,
+            lastSyncAt: Date.now(),
+          });
+          return localSession;
         }
 
-        try {
-          // Ищем сессию по коду в Supabase
-          console.log('🔍 Querying sessions table for code:', upperCode);
-          const { data: sessionData, error } = await client
+        set({ syncError: remoteError });
+        return null;
+      },
+
+      authenticateStaff: async (code: string, pin: string) => {
+        const session = await get().loadSessionByCode(code);
+        if (!session) {
+          return { ok: false, error: 'Сессия не найдена. Проверьте код.' };
+        }
+        if (session.status === 'ended') {
+          return { ok: false, error: 'Эта сессия уже завершена.' };
+        }
+
+        const expected = session.staffPin || DEFAULT_STAFF_PIN;
+        if (pin.trim() !== expected) {
+          return { ok: false, error: 'Неверный PIN для персонала.' };
+        }
+
+        set({ staffSessionId: session.id });
+        return { ok: true };
+      },
+
+      logoutStaff: () => set({ staffSessionId: null }),
+
+      endSession: async () => {
+        const { session } = get();
+        if (!session) return false;
+
+        if (isSupabaseConfigured) {
+          const client = getSupabase();
+          if (!client) {
+            set({ syncError: 'Нет подключения к серверу — не удалось завершить сессию.' });
+            return false;
+          }
+
+          const { error } = await client
             .from('sessions')
-            .select('*')
-            .eq('code', upperCode)
-            .maybeSingle();
-
-          console.log('🔍 Query result:', { sessionData, error });
+            .update({ status: 'ended' })
+            .eq('id', session.id);
 
           if (error) {
-            console.error('❌ Session query error:', error.message, error.code);
-            return null;
+            console.error('End session error:', error);
+            set({ syncError: 'Не удалось завершить сессию на сервере.' });
+            return false;
           }
-          
-          if (!sessionData) {
-            console.warn('⚠️ Session not found in database for code:', upperCode);
-            return null;
-          }
-
-          // Конвертируем в наш формат
-          const session: Session = {
-            id: sessionData.id,
-            code: sessionData.code,
-            name: sessionData.name,
-            status: sessionData.status,
-            phase: sessionData.phase,
-            timer: sessionData.timer,
-            phaseDuration: sessionData.phase_duration,
-            createdAt: new Date(sessionData.created_at).getTime(),
-          };
-
-          // Загружаем связанные данные
-          const [playersRes, dealsRes, eventsRes, ratesRes] = await Promise.all([
-            client.from('players').select('*').eq('session_id', session.id),
-            client.from('deals').select('*').eq('session_id', session.id),
-            client.from('events').select('*').eq('session_id', session.id).order('created_at', { ascending: false }),
-            client.from('currency_rates').select('*').eq('session_id', session.id),
-          ]);
-
-          const players = playersRes.data?.map((db: any) => ({
-            id: db.id,
-            name: db.name,
-            sessionId: db.session_id,
-            role: db.role,
-            balance: db.balance,
-            usefulnessPoints: db.usefulness_points || 0,
-            goods: db.goods,
-            qrCode: db.id,
-            dealsCount: db.deals_count,
-            salary: db.salary,
-            registered: true,
-          })) || [];
-
-          const deals = dealsRes.data?.map((db: any) => ({
-            id: db.id,
-            sellerId: db.seller_id,
-            buyerId: db.buyer_id,
-            goods: db.goods,
-            quantity: db.quantity,
-            amount: db.amount,
-            timestamp: new Date(db.created_at).getTime(),
-            status: db.status,
-            sellerConfirmed: db.seller_confirmed,
-            buyerConfirmed: db.buyer_confirmed,
-          })) || [];
-
-          const events = eventsRes.data?.map((db: any) => ({
-            id: db.id,
-            title: db.title,
-            description: db.description,
-            timestamp: new Date(db.created_at).getTime(),
-            type: db.type,
-          })) || [];
-
-          const currencyRates = ratesRes.data?.map((r: any) => ({
-            currency: r.currency,
-            rate: Number(r.rate),
-            change: Number(r.change),
-          })) || [];
-
-          // Сохраняем всё локально
-          set({
-            session,
-            players,
-            deals,
-            events,
-            currencyRates: currencyRates.length > 0 ? currencyRates : initialCurrencyRates,
-          });
-
-          console.log('✅ Session loaded from Supabase:', session.code);
-          return session;
-        } catch (e) {
-          console.error('Load session error:', e);
-          return null;
-        }
-      },
-
-      joinSession: async (sessionId: string, playerName: string) => {
-        const state = get();
-        console.log('🎮 joinSession called:', { sessionId, playerName, currentSession: state.session?.id });
-        
-        if (!state.session || state.session.id !== sessionId) {
-          console.error('❌ joinSession: session mismatch', { sessionId, currentSession: state.session?.id });
-          return null;
-        }
-        if (state.session.status === 'ended') {
-          console.error('❌ joinSession: session ended');
-          return null;
         }
 
-        const id = generateId();
-        const role: PlayerRole = Math.random() < 0.6 ? 'buyer' : 'seller';
-        const player: Player = {
-          id,
-          name: playerName,
-          sessionId,
-          role,
-          balance: 1000,
-          usefulnessPoints: 0,
-          goods: { 'Нефть': 0, 'Зерно': 5, 'Металл': 0, 'Техника': 0, 'Лекарства': 0 },
-          qrCode: id,
-          dealsCount: 0,
-          salary: 200,
-          registered: true,
-        };
-        
-        console.log('✅ Creating player:', player);
-        
-        set((s) => ({ 
-          players: [...s.players, player], 
-          currentPlayerId: id,
-          isAuthenticated: false,
-          isAdmin: false,
-          savedPlayerData: player,
-        }));
-        
-        console.log('✅ Player added to store. Total players:', get().players.length);
-        
-        // Push в Supabase и ждём завершения
-        console.log('📤 Pushing player to Supabase...');
-        await get().pushToSupabase();
-        console.log('✅ Player pushed to Supabase');
-        
-        return player;
-      },
-
-      leaveSession: () => {
-        set({ currentPlayerId: null, isAdmin: false });
-      },
-
-      endSession: () => {
-        const state = get();
         set({
-          session: null,
-          timerRunning: false,
-          isAuthenticated: false,
-          isAdmin: false,
-          players: [],
-          deals: [],
-          events: [],
-          savedPlayerData: null,
-        });
-        
-        // Удаляем из Supabase
-        if (isSupabaseConfigured && state.session) {
-          const client = getSupabase();
-          if (client) {
-            client.from('sessions').delete().eq('id', state.session.id).then();
-          }
-        }
-      },
-
-      restoreSession: () => {
-        const state = get();
-        if (!state.savedPlayerData || !state.session) return false;
-        const playerExists = state.players.find(p => p.id === state.savedPlayerData!.id);
-        if (!playerExists) {
-          set({ savedPlayerData: null, currentPlayerId: null });
-          return false;
-        }
-        if (state.session.status === 'ended') return false;
-        set({
-          currentPlayerId: state.savedPlayerData.id,
-          isAuthenticated: false,
-          isAdmin: false,
+          session: { ...session, status: 'ended' },
+          syncError: null,
+          lastSyncAt: Date.now(),
         });
         return true;
       },
 
-      setCurrentPlayer: (id: string) => {
+      resetSession: () =>
+        set({
+          session: null,
+          players: [],
+          currentPlayerId: null,
+          savedPlayerData: null,
+          staffSessionId: null,
+          syncError: null,
+          lastSyncAt: null,
+          pointsColumnAvailable: null,
+        }),
+
+      joinSession: async (sessionId: string, playerName: string) => {
         const state = get();
-        const playerData = id ? state.players.find(p => p.id === id) || null : null;
+        if (!state.session || state.session.id !== sessionId) return null;
+        if (state.session.status === 'ended') return null;
+
+        const name = playerName.trim().slice(0, 40);
+        if (!name) return null;
+
+        const role = chooseRole(state.players);
+
+        const player: Player = {
+          id: generateId(),
+          name,
+          sessionId,
+          role,
+          // Покупателям деньги в этой версии не нужны: balance = 0.
+          balance: role === 'seller' ? 1000 : 0,
+          usefulnessPoints: 0,
+          createdAt: Date.now(),
+        };
+
+        if (isSupabaseConfigured) {
+          const client = getSupabase();
+          if (!client) {
+            set({ syncError: 'Нет подключения к серверу.' });
+            return null;
+          }
+
+          const pointsMode = await detectPointsColumn(client, set, get);
+          const basePayload: Record<string, unknown> = {
+            id: player.id,
+            session_id: player.sessionId,
+            name: player.name,
+            role: player.role,
+            balance: player.balance,
+            // Резервное хранилище очков, если колонки usefulness_points нет.
+            goods: { __usefulness_points: 0 },
+          };
+          const payload =
+            pointsMode === false
+              ? basePayload
+              : { ...basePayload, usefulness_points: player.usefulnessPoints };
+
+          let { error } = await client.from('players').insert(payload);
+
+          // Старая база без колонки usefulness_points — повторяем без неё.
+          if (error && error.code === '42703' && pointsMode !== false) {
+            set({ pointsColumnAvailable: false });
+            const retry = await client.from('players').insert(basePayload);
+            error = retry.error;
+          } else if (!error && pointsMode === null) {
+            set({ pointsColumnAvailable: true });
+          }
+
+          if (error) {
+            console.error('Player insert error:', error);
+            set({ syncError: 'Не удалось сохранить участника на сервере.' });
+            return null;
+          }
+        }
+
+        set((current) => ({
+          players: [...current.players.filter((p) => p.id !== player.id), player],
+          currentPlayerId: player.id,
+          savedPlayerData: player,
+          syncError: null,
+          lastSyncAt: Date.now(),
+        }));
+
+        // Подтягиваем актуальный список (на случай, если за это время
+        // подключились другие игроки). Не блокируем вход.
+        if (isSupabaseConfigured) void get().syncFromSupabase();
+
+        return player;
+      },
+
+      leaveSession: () => set({ currentPlayerId: null }),
+
+      restoreSession: () => {
+        const { savedPlayerData, session } = get();
+        if (!savedPlayerData || !session) return false;
+        if (session.status === 'ended') return false;
+        set({ currentPlayerId: savedPlayerData.id });
+        return true;
+      },
+
+      setCurrentPlayer: (id: string | null) => {
+        const { players } = get();
         set({
           currentPlayerId: id || null,
-          isAuthenticated: false,
-          isAdmin: false,
-          savedPlayerData: playerData,
+          savedPlayerData: id
+            ? players.find((p) => p.id === id) || null
+            : get().savedPlayerData,
         });
       },
 
-      createDeal: (sellerId: string, buyerId: string, goods: string, quantity: number, amount: number) => {
-        const deal: Deal = {
-          id: generateId(),
-          sellerId,
-          buyerId,
-          goods,
-          quantity,
-          amount,
-          timestamp: Date.now(),
-          status: 'pending',
-          sellerConfirmed: false,
-          buyerConfirmed: false,
-        };
-        set((state) => ({ deals: [...state.deals, deal], pendingDeal: deal }));
-        get().pushToSupabase();
-      },
+      creditPlayer: async (playerId: string, amount: number, kind: CreditKind) => {
+        const state = get();
+        const session = state.session;
 
-      confirmDeal: (dealId: string, playerId: string) => {
-        set((state) => {
-          const deal = state.deals.find(d => d.id === dealId);
-          if (!deal) return state;
+        if (!session) return { ok: false, error: 'Сессия не выбрана.' };
+        if (session.status === 'ended') return { ok: false, error: 'Сессия завершена.' };
 
-          const isSeller = deal.sellerId === playerId;
-          const isBuyer = deal.buyerId === playerId;
-          if (!isSeller && !isBuyer) return state;
+        const player = state.players.find((p) => p.id === playerId);
+        if (!player) return { ok: false, error: 'Участник не найден.' };
 
-          const updatedDeal = {
-            ...deal,
-            sellerConfirmed: isSeller ? true : deal.sellerConfirmed,
-            buyerConfirmed: isBuyer ? true : deal.buyerConfirmed,
-          };
-
-          const bothConfirmed = updatedDeal.sellerConfirmed && updatedDeal.buyerConfirmed;
-
-          if (bothConfirmed) {
-            const players = state.players.map(p => {
-              if (p.id === deal.sellerId) {
-                // Продавец получает деньги
-                return {
-                  ...p,
-                  balance: p.balance + deal.amount,
-                  goods: { ...p.goods, [deal.goods]: (p.goods[deal.goods] || 0) - deal.quantity },
-                  dealsCount: p.dealsCount + 1,
-                };
-              }
-              if (p.id === deal.buyerId) {
-                // Покупатель получает очки полезности (равные сумме сделки) и товары
-                return {
-                  ...p,
-                  balance: p.balance - deal.amount,
-                  usefulnessPoints: p.usefulnessPoints + deal.amount,
-                  goods: { ...p.goods, [deal.goods]: (p.goods[deal.goods] || 0) + deal.quantity },
-                  dealsCount: p.dealsCount + 1,
-                };
-              }
-              return p;
-            });
-
-            const deals = state.deals.map(d =>
-              d.id === dealId ? { ...updatedDeal, status: 'confirmed' as const } : d
-            );
-
-            setTimeout(() => get().pushToSupabase(), 0);
-            return { players, deals, pendingDeal: null };
-          } else {
-            const deals = state.deals.map(d => d.id === dealId ? updatedDeal : d);
-            setTimeout(() => get().pushToSupabase(), 0);
-            return { deals };
-          }
-        });
-      },
-
-      rejectDeal: (dealId: string) => {
-        set((state) => ({
-          deals: state.deals.map(d =>
-            d.id === dealId ? { ...d, status: 'rejected' as const } : d
-          ),
-          pendingDeal: null,
-        }));
-        get().pushToSupabase();
-      },
-
-      startPhase: (duration: number) => {
-        set((state) => ({
-          session: state.session ? {
-            ...state.session,
-            phase: state.session.phase + 1,
-            timer: duration,
-            phaseDuration: duration,
-            status: 'active' as SessionStatus,
-          } : null,
-          timerRunning: true,
-        }));
-        get().pushToSupabase();
-      },
-
-      pausePhase: () => set((state) => ({
-        timerRunning: false,
-        session: state.session ? { ...state.session, status: 'paused' as SessionStatus } : null,
-      })),
-
-      resumePhase: () => set((state) => ({
-        timerRunning: true,
-        session: state.session ? { ...state.session, status: 'active' as SessionStatus } : null,
-      })),
-
-      endPhase: () => {
-        set((state) => ({
-          timerRunning: false,
-          session: state.session ? { ...state.session, timer: 0, status: 'ended' as SessionStatus } : null,
-        }));
-        get().paySalary();
-        get().pushToSupabase();
-      },
-
-      tickTimer: () => {
-        set((state) => {
-          if (!state.timerRunning || !state.session || state.session.timer <= 0) return state;
-          const newTimer = state.session.timer - 1;
+        const expectedRole: PlayerRole = kind === 'money' ? 'seller' : 'buyer';
+        if (player.role !== expectedRole) {
           return {
-            session: { ...state.session, timer: newTimer },
-            timerRunning: newTimer > 0,
+            ok: false,
+            error:
+              kind === 'money'
+                ? 'Деньги начисляются только продавцам.'
+                : 'Очки полезности начисляются только покупателям.',
           };
-        });
-      },
-
-      addEvent: (event) => {
-        const newEvent: GameEvent = {
-          ...event,
-          id: generateId(),
-          timestamp: Date.now(),
-        };
-        set((state) => ({ events: [newEvent, ...state.events] }));
-        get().pushToSupabase();
-      },
-
-      updateCurrencyRate: (currency: string, rate: number) => {
-        set((state) => ({
-          currencyRates: state.currencyRates.map(c => {
-            if (c.currency === currency) {
-              const change = ((rate - c.rate) / c.rate) * 100;
-              return { ...c, rate, change };
-            }
-            return c;
-          }),
-        }));
-        get().pushToSupabase();
-      },
-
-      setAdmin: (isAdmin: boolean) => set({ isAdmin }),
-
-      login: (login: string, password: string) => {
-        const state = get();
-        if (login === state.adminLogin && password === state.adminPassword) {
-          set({ isAuthenticated: true, isAdmin: true, currentPlayerId: null });
-          return true;
         }
-        return false;
-      },
 
-      logout: () => {
-        const state = get();
-        const playerData = state.currentPlayerId
-          ? state.players.find(p => p.id === state.currentPlayerId) || null
-          : null;
-        set({
-          isAuthenticated: false,
-          isAdmin: false,
-          currentPlayerId: null,
-          savedPlayerData: playerData,
-        });
-      },
+        const value = Math.floor(Number(amount));
+        if (!Number.isFinite(value) || value <= 0) {
+          return { ok: false, error: 'Введите сумму больше нуля.' };
+        }
+        if (value > MAX_CREDIT) {
+          return { ok: false, error: 'Слишком большая сумма.' };
+        }
 
-      setAdminCredentials: (login: string, password: string) => {
-        set({ adminLogin: login, adminPassword: password });
-      },
+        const applyLocally = (updated: Player, newValue: number): CreditResult => {
+          set((current) => ({
+            players: current.players.map((p) => (p.id === updated.id ? updated : p)),
+            savedPlayerData:
+              current.savedPlayerData?.id === updated.id ? updated : current.savedPlayerData,
+            syncError: null,
+            lastSyncAt: Date.now(),
+          }));
+          return { ok: true, player: updated, value: newValue };
+        };
 
-      paySalary: () => {
-        set((state) => ({
-          players: state.players.map(p => {
-            if (p.dealsCount > 0) {
-              return { ...p, balance: p.balance + p.salary, dealsCount: 0 };
+        // Локальный режим — без сервера.
+        if (!isSupabaseConfigured) {
+          const updated: Player =
+            kind === 'money'
+              ? { ...player, balance: player.balance + value }
+              : { ...player, usefulnessPoints: player.usefulnessPoints + value };
+          return applyLocally(
+            updated,
+            kind === 'money' ? updated.balance : updated.usefulnessPoints
+          );
+        }
+
+        const client = getSupabase();
+        if (!client) return { ok: false, error: 'Нет подключения к серверу.' };
+
+        let pointsMode = state.pointsColumnAvailable;
+        if (kind === 'points' && pointsMode === null) {
+          pointsMode = await detectPointsColumn(client, set, get);
+        }
+
+        // Начисление с оптимистической блокировкой: обновляем строку только
+        // если значение не изменилось с момента чтения. Это защищает от
+        // потери начислений, когда над одним игроком работают с разных устройств.
+        for (let attempt = 0; attempt < 6; attempt += 1) {
+          const { data: fresh, error: readError } = await client
+            .from('players')
+            .select('*')
+            .eq('id', playerId)
+            .eq('session_id', session.id)
+            .maybeSingle();
+
+          if (readError) {
+            console.error('Credit read error:', readError);
+            return { ok: false, error: 'Не удалось прочитать данные участника.' };
+          }
+          if (!fresh) {
+            return { ok: false, error: 'Участник не найден в этой сессии.' };
+          }
+          if (fresh.role !== expectedRole) {
+            return {
+              ok: false,
+              error:
+                kind === 'money'
+                  ? 'Деньги начисляются только продавцам.'
+                  : 'Очки полезности начисляются только покупателям.',
+            };
+          }
+
+          const freshGoods =
+            fresh.goods && typeof fresh.goods === 'object'
+              ? (fresh.goods as Record<string, unknown>)
+              : {};
+          const goodsPoints = Number(freshGoods.__usefulness_points) || 0;
+          const columnPoints = Number(fresh.usefulness_points) || 0;
+
+          if (kind === 'money') {
+            const currentValue = Number(fresh.balance) || 0;
+            const nextValue = currentValue + value;
+
+            const { data: updatedRow, error: updateError } = await client
+              .from('players')
+              .update({ balance: nextValue })
+              .eq('id', playerId)
+              .eq('balance', currentValue)
+              .select('id')
+              .maybeSingle();
+
+            if (updateError) {
+              console.error('Credit update error:', updateError);
+              return { ok: false, error: 'Не удалось сохранить начисление.' };
             }
-            return p;
-          }),
-        }));
+
+            if (updatedRow) {
+              return applyLocally({ ...player, balance: nextValue }, nextValue);
+            }
+
+            await sleep(60 * (attempt + 1));
+            continue;
+          }
+
+          if (pointsMode === false) {
+            // Резервный режим: колонки usefulness_points нет, пишем в goods.
+            const currentValue = goodsPoints;
+            const nextValue = currentValue + value;
+            const nextGoods = { ...freshGoods, __usefulness_points: nextValue };
+
+            const { data: updatedRow, error: updateError } = await client
+              .from('players')
+              .update({ goods: nextGoods })
+              .eq('id', playerId)
+              .filter('goods', 'eq', JSON.stringify(freshGoods))
+              .select('id')
+              .maybeSingle();
+
+            if (updateError) {
+              console.error('Credit update error (goods fallback):', updateError);
+              return { ok: false, error: 'Не удалось сохранить начисление.' };
+            }
+
+            if (updatedRow) {
+              return applyLocally({ ...player, usefulnessPoints: nextValue }, nextValue);
+            }
+
+            await sleep(60 * (attempt + 1));
+            continue;
+          }
+
+          // Основной режим: отдельная колонка usefulness_points.
+          // goods тоже обновляем, чтобы резервное значение не отставало.
+          const currentValue = Math.max(columnPoints, goodsPoints);
+          const nextValue = currentValue + value;
+          const nextGoods = { ...freshGoods, __usefulness_points: nextValue };
+
+          const { data: updatedRow, error: updateError } = await client
+            .from('players')
+            .update({ usefulness_points: nextValue, goods: nextGoods })
+            .eq('id', playerId)
+            .eq('usefulness_points', columnPoints)
+            .select('id')
+            .maybeSingle();
+
+          if (updateError) {
+            if (updateError.code === '42703') {
+              set({ pointsColumnAvailable: false });
+              pointsMode = false;
+              continue;
+            }
+            console.error('Credit update error:', updateError);
+            return { ok: false, error: 'Не удалось сохранить начисление.' };
+          }
+
+          if (updatedRow) {
+            return applyLocally({ ...player, usefulnessPoints: nextValue }, nextValue);
+          }
+
+          // Кто-то успел изменить значение — читаем заново.
+          await sleep(60 * (attempt + 1));
+        }
+
+        return {
+          ok: false,
+          error: 'Данные участника только что изменились на другом устройстве. Повторите попытку.',
+        };
       },
 
-      deposit: (playerId: string, amount: number) => {
-        set((state) => ({
-          players: state.players.map(p =>
-            p.id === playerId ? { ...p, balance: p.balance + amount } : p
-          ),
-        }));
-        get().pushToSupabase();
-      },
+      syncFromSupabase: async () => {
+        if (!isSupabaseConfigured) return;
+        const state = get();
+        if (!state.session) return;
 
-      withdraw: (playerId: string, amount: number) => {
-        set((state) => ({
-          players: state.players.map(p =>
-            p.id === playerId ? { ...p, balance: p.balance - amount } : p
-          ),
-        }));
-        get().pushToSupabase();
+        const client = getSupabase();
+        if (!client) return;
+
+        if (get().pointsColumnAvailable === null) {
+          await detectPointsColumn(client, set, get);
+        }
+
+        try {
+          const [sessionRes, playersRes] = await Promise.all([
+            client.from('sessions').select('*').eq('id', state.session.id).maybeSingle(),
+            client.from('players').select('*').eq('session_id', state.session.id),
+          ]);
+
+          const updates: Partial<GameState> = { lastSyncAt: Date.now() };
+
+          if (sessionRes.data) {
+            updates.session = mapSessionRow(sessionRes.data);
+          }
+          if (!playersRes.error && playersRes.data) {
+            updates.players = playersRes.data.map(mapPlayerRow);
+          }
+
+          if (sessionRes.error || playersRes.error) {
+            console.error('Sync error:', sessionRes.error || playersRes.error);
+            updates.syncError = 'Не удалось синхронизировать данные.';
+          } else {
+            updates.syncError = null;
+          }
+
+          set(updates);
+        } catch (error) {
+          console.error('Sync from Supabase error:', error);
+          set({ syncError: 'Не удалось синхронизировать данные.' });
+        }
       },
     }),
     {
-      name: 'econom-strategy-storage',
+      name: STORAGE_KEY,
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
         session: state.session,
         players: state.players,
-        deals: state.deals,
-        events: state.events,
-        currencyRates: state.currencyRates,
-        isAuthenticated: state.isAuthenticated,
-        isAdmin: state.isAdmin,
-        adminLogin: state.adminLogin,
-        adminPassword: state.adminPassword,
         currentPlayerId: state.currentPlayerId,
         savedPlayerData: state.savedPlayerData,
+        staffSessionId: state.staffSessionId,
       }),
+      merge: (persistedState, currentState) => {
+        const persisted = (persistedState || {}) as any;
+        const players = Array.isArray(persisted.players)
+          ? (persisted.players.map(normalizePlayer).filter(Boolean) as Player[])
+          : [];
+
+        return {
+          ...currentState,
+          session: normalizeSession(persisted.session),
+          players,
+          currentPlayerId: persisted.currentPlayerId ?? null,
+          savedPlayerData: normalizePlayer(persisted.savedPlayerData),
+          staffSessionId: persisted.staffSessionId ?? null,
+        };
+      },
     }
   )
 );

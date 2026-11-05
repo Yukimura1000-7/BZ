@@ -1,3 +1,11 @@
+-- Актуальная версия приложения использует только таблицы sessions и players.
+-- Остальные таблицы ниже оставлены для совместимости со старой версией игры
+-- и приложением не используются.
+--
+-- Очки полезности: если колонка players.usefulness_points отсутствует,
+-- приложение автоматически хранит их в players.goods.__usefulness_points.
+-- Для выделенной колонки выполните migration-add-usefulness-points.sql.
+
 -- Создание таблицы сессий
 CREATE TABLE sessions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
